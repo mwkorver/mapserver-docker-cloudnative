@@ -1,7 +1,7 @@
 # Stage 1: build MapServer from source
-FROM --platform=linux/arm64 ghcr.io/osgeo/gdal:ubuntu-full-3.10.3 AS builder
+FROM --platform=linux/arm64 ghcr.io/osgeo/gdal:ubuntu-full-3.12.4 AS builder
 
-ARG MAPSERVER_VERSION=8.4.0
+ARG MAPSERVER_VERSION=8.6.3
 
 RUN apt-get update && \
     env DEBIAN_FRONTEND=noninteractive \
@@ -41,7 +41,7 @@ RUN apt-get update && \
     rm -rf /tmp/mapserver-${MAPSERVER_VERSION}
 
 # Stage 2: runtime image
-FROM --platform=linux/arm64 ghcr.io/osgeo/gdal:ubuntu-full-3.10.3
+FROM --platform=linux/arm64 ghcr.io/osgeo/gdal:ubuntu-full-3.12.4
 
 COPY --from=builder /usr/local/bin/mapserv /usr/local/bin/mapserv
 COPY --from=builder /usr/local/lib/libmapserver* /usr/local/lib/
