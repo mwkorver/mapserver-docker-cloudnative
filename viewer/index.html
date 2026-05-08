@@ -97,10 +97,12 @@
         if (zoom < 18) {
           this._div.innerHTML =
             '<div class="layer-row"><span class="swatch" style="background:#e06020;opacity:0.6;border:1px solid #e06020"></span>COG Tile Footprints</div>' +
-            '<div class="layer-row" style="color:#aaa;padding-left:18px">zoom in for imagery</div>';
+            '<div class="layer-row" style="color:#aaa;padding-left:18px">zoom in for imagery</div>' +
+            '<div class="layer-row" style="color:#888;padding-left:18px;font-size:11px">zoom: ' + zoom + '</div>';
         } else {
           this._div.innerHTML =
-            '<div class="layer-row"><span class="swatch" style="background:#4a9eff"></span>WMS: auckland-2024</div>';
+            '<div class="layer-row"><span class="swatch" style="background:#4a9eff"></span>WMS: auckland-2024</div>' +
+            '<div class="layer-row" style="color:#888;padding-left:18px;font-size:11px">zoom: ' + zoom + '</div>';
         }
       }
     });
@@ -123,7 +125,7 @@
     const canvasRenderer = L.canvas();
 
     function loadFootprints(baseUrl) {
-      const url = baseUrl.replace('/mapserv', '/tile_extents.geojson');
+      const url = new URL(baseUrl).origin + '/tile_extents.geojson';
       fetch(url)
         .then(r => r.json())
         .then(data => {
