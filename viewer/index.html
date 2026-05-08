@@ -48,6 +48,28 @@
     #apply-btn:hover { background: #2266cc; }
 
     #map { height: 100%; width: 100%; }
+
+    .layer-info {
+      background: white;
+      border-radius: 6px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      padding: 6px 10px;
+      font-size: 12px;
+      line-height: 1.5;
+      min-width: 160px;
+    }
+    .layer-info .layer-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: #444;
+    }
+    .layer-info .swatch {
+      width: 12px;
+      height: 12px;
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
   </style>
 </head>
 <body>
@@ -61,6 +83,31 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
     const map = L.map('map', { maxZoom: 20 }).setView([-36.87, 174.77], 13);
+
+    const LayerInfoControl = L.Control.extend({
+      options: { position: 'topright' },
+      onAdd: function() {
+        const div = L.DomUtil.create('div', 'layer-info');
+        this._div = div;
+        this.update();
+        return div;
+      },
+      update: function() {
+        const zoom = map.getZoom();
+        if (zoom < 18) {
+          this._div.innerHTML =
+            '<div class="layer-row"><span class="swatch" style="background:#e06020;opacity:0.6;border:1px solid #e06020"></span>COG Tile Footprints</div>' +
+            '<div class="layer-row" style="color:#aaa;padding-left:18px">zoom in for imagery</div>';
+        } else {
+          this._div.innerHTML =
+            '<div class="layer-row"><span class="swatch" style="background:#4a9eff"></span>WMS: auckland-2024</div>';
+        }
+      }
+    });
+
+    const layerInfo = new LayerInfoControl();
+    layerInfo.addTo(map);
+    map.on('zoomend', function() { layerInfo.update(); });
 
     const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
