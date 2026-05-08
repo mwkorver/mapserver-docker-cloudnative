@@ -19,7 +19,7 @@ WORKERS = 32
 
 gdal.SetConfigOption("AWS_NO_SIGN_REQUEST", "YES")
 gdal.SetConfigOption("VSI_CACHE", "TRUE")
-gdal.SetConfigOption("VSI_CACHE_SIZE", "50000000")
+gdal.SetConfigOption("VSI_CACHE_SIZE", "268435456")
 gdal.SetConfigOption("GDAL_DISABLE_READDIR_ON_OPEN", "TRUE")
 gdal.SetConfigOption("CPL_VSIL_CURL_ALLOWED_EXTENSIONS", ".tiff,.tif")
 
