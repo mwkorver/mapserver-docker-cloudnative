@@ -2,7 +2,7 @@ MAP
   NAME "nz-imagery"
   STATUS ON
   SIZE 256 256
-  EXTENT 1756960 5914320 1757920 5915760
+  EXTENT 1722000 5900000 1812000 5970000
   UNITS METERS
 
   OUTPUTFORMAT
@@ -37,16 +37,16 @@ MAP
   CONFIG "CPL_VSIL_CURL_ALLOWED_EXTENSIONS" ".tiff,.tif"
 
   LAYER
-    NAME "auckland-central-2023"
+    NAME "auckland-2024"
     TYPE RASTER
     STATUS ON
-    DATA "/vsis3/nz-imagery/auckland/auckland-central_2023_0.06m/rgb/2193/BA32_2000_2202.tiff"
+    DATA "/usr/src/mapfiles/mosaic.vrt"
     PROCESSING "BANDS=1,2,3"
     PROJECTION
       "init=epsg:2193"
     END
     METADATA
-      "wms_title" "Auckland Central 2023 0.06m"
+      "wms_title" "Auckland 2024 0.075m"
     END
   END
 
