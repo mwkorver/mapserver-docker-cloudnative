@@ -73,6 +73,8 @@
     // COG tile footprints — shown at zoom < 18
     let footprintsLayer = null;
 
+    const canvasRenderer = L.canvas();
+
     function loadFootprints(baseUrl) {
       const url = baseUrl.replace('/mapserv', '/tile_extents.geojson');
       fetch(url)
@@ -80,17 +82,14 @@
         .then(data => {
           if (footprintsLayer) map.removeLayer(footprintsLayer);
           footprintsLayer = L.geoJSON(data, {
+            renderer: canvasRenderer,
             style: {
               color: '#e06020',
               weight: 1,
               fillOpacity: 0.05,
               fillColor: '#e06020'
-            },
-            onEachFeature: function(feature, layer) {
-              layer.bindTooltip(feature.properties.file, { sticky: true });
             }
           });
-          // Only show footprints when zoomed out (< zoom 18)
           function updateFootprints() {
             if (map.getZoom() < 18) {
               if (!map.hasLayer(footprintsLayer)) footprintsLayer.addTo(map);
