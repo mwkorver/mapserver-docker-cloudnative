@@ -7,4 +7,10 @@ if [ -n "$VRT_S3_URI" ]; then
     echo "VRT ready."
 fi
 
+if [ -n "$EXTENTS_S3_URI" ]; then
+    echo "Downloading tile extents from ${EXTENTS_S3_URI}..."
+    aws s3 cp "${EXTENTS_S3_URI}" /usr/src/mapfiles/tile_extents.geojson
+    echo "Tile extents ready."
+fi
+
 exec /usr/bin/supervisord -c /etc/supervisor/supervisord.conf
