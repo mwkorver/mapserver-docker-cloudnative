@@ -86,6 +86,8 @@ GitHub Actions builds and pushes the image to ECR on every push to `main`. Authe
 - IAM role `github-actions-mapserver` with OIDC trust policy (see `iam/trust-policy.json`)
 - ECR repo named `mapserver-docker-cloudnative`
 
+The workflow pins the build to `linux/arm64` because the target is AWS Graviton (ARM64). An `amd64` image would not run on Graviton Fargate tasks. Local builds use the host's native architecture — the `--platform` flag is only set in CI/CD.
+
 See `.github/workflows/build-push.yml` for the full pipeline.
 
 ---
