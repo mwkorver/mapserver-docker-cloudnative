@@ -1,86 +1,53 @@
 MAP
-	OUTPUTFORMAT
-		NAME png24
-		DRIVER "AGG/PNG"
-		MIMETYPE "image/png"
-		IMAGEMODE RGB
-		EXTENSION "png"
-	END
-	
-	OUTPUTFORMAT
-		NAME jpeg
-		DRIVER "AGG/JPEG"
-		MIMETYPE "image/jpeg"
-		IMAGEMODE RGB
-		EXTENSION "jpg"
-	END
-	
-	# How to return GeoJSON for Mapserver vector layers?
-	# http://mapserver.org/output/ogr_output.html
-	# https://github.com/mapserver/msautotest/blob/master/wxs/wfs_ogr.map
-	OUTPUTFORMAT
-		NAME "geojson"
-		DRIVER "OGR/GEOJSON"
-		MIMETYPE "application/json; subtype=geojson"
-		FORMATOPTION "STORAGE=memory"
-		FORMATOPTION "FORM=SIMPLE"
-		FORMATOPTION "LCO:WRITE_BBOX=YES"
-	END
-	
-	IMAGETYPE PNG24
-	IMAGECOLOR 255 255 255
+  NAME "nz-imagery"
+  STATUS ON
+  SIZE 256 256
+  EXTENT 1756960 5914320 1757920 5915760
+  UNITS METERS
 
-	# Write log to /var/log/mapserver.stderr (make sure the file exists) to see error log.
-	CONFIG "MS_ERRORFILE" "stderr"
-	CONFIG "CPL_VSIL_CURL_ALLOWED_EXTENSIONS" ".tif" # .shp .shx .dbf .qix .cpg .prj
-	CONFIG "VSI_CACHE" "TRUE"
-	# cache size in bytes
-	CONFIG "VSI_CACHE_SIZE" "50000000"
+  OUTPUTFORMAT
+    NAME png24
+    DRIVER "AGG/PNG"
+    MIMETYPE "image/png"
+    IMAGEMODE RGB
+    EXTENSION "png"
+  END
 
-	EXTENT -180 -90 180 90
+  IMAGETYPE PNG24
+  IMAGECOLOR 255 255 255
 
-	PROJECTION
-		# Performance optimization: Instead of specifying 4326, set all the Proj4 parameters directly.
-		# http://mapserver.org/optimization/mapfile.html#projections
-		# http://spatialreference.org/ref/epsg/4326/proj4/
-		"init=epsg:4326"
-		#"proj=longlat"
-		#"ellps=WGS84"
-		#"datum=WGS84"
-		#"no_defs"
-	END
+  PROJECTION
+    "init=epsg:2193"
+  END
 
-	WEB
-		# Uncomment the following and run `touch /var/log/mapserver_output.log` to see access log.
-		#LOG /var/log/mapserver_output.log
+  WEB
+    METADATA
+      "wms_title"           "NZ Imagery MapServer"
+      "wms_onlineresource"  "http://localhost/mapserv"
+      "wms_srs"             "EPSG:2193 EPSG:4326 EPSG:3857"
+      "wms_enable_request"  "*"
+    END
+  END
 
-		# Note: You should configure your webserver (ie. NGINX) to use
-		# proxy_pass to forward all Mapserver traffic to
-		# localhost:8080. Otherwise, edit ows_onlineresource
-		# accordingly.
-		METADATA
-			"ows_title" "raster_layer"
-			"ows_onlineresource" "http://localhost:8000?"
-			"ows_srs" "EPSG:4326"
-			"ows_enable_request" "*"
-			"wms_srs" "EPSG:4326"
-			"wms_feature_info_mime_type" "text/html"
-			"wms_allow_getmap_without_styles" "true"
-			"wfs_getfeature_formatlist" "ogrgml,geojson"
-		END
-	END
+  CONFIG "MS_ERRORFILE" "stderr"
+  CONFIG "AWS_NO_SIGN_REQUEST" "YES"
+  CONFIG "VSI_CACHE" "TRUE"
+  CONFIG "VSI_CACHE_SIZE" "50000000"
+  CONFIG "GDAL_DISABLE_READDIR_ON_OPEN" "TRUE"
+  CONFIG "CPL_VSIL_CURL_ALLOWED_EXTENSIONS" ".tiff,.tif"
 
-	MAXSIZE 4096
+  LAYER
+    NAME "auckland-central-2023"
+    TYPE RASTER
+    STATUS ON
+    DATA "/vsis3/nz-imagery/auckland/auckland-central_2023_0.06m/rgb/2193/BA32_2000_2202.tiff"
+    PROCESSING "BANDS=1,2,3"
+    PROJECTION
+      "init=epsg:2193"
+    END
+    METADATA
+      "wms_title" "Auckland Central 2023 0.06m"
+    END
+  END
 
-	LAYER
-		NAME		raster_layer
-		METADATA
-			"ows_title"	"raster_layer_lowres"
-			"ows_srs"	"epsg:4326"
-		END
-		DATA		"/vsicurl/https://github.com/OSGeo/gdal/raw/86193bf5942fb63b91b06a18df78efc73a2d869b/autotest/gdrivers/data/gtiff/int8.tif"
-		STATUS		OFF
-		TYPE		RASTER
-	END
-
-END # mapfile
+END
