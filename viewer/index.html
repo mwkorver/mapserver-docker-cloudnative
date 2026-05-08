@@ -92,11 +92,12 @@
         this.update();
         return div;
       },
-      update: function() {
+      update: function(count) {
         const zoom = map.getZoom();
         if (zoom < 18) {
+          const countStr = count !== undefined ? ' (' + count + ')' : '';
           this._div.innerHTML =
-            '<div class="layer-row"><span class="swatch" style="background:#e06020;opacity:0.6;border:1px solid #e06020"></span>COG Tile Footprints</div>' +
+            '<div class="layer-row"><span class="swatch" style="background:#e06020;opacity:0.6;border:1px solid #e06020"></span>COG Footprints' + countStr + '</div>' +
             '<div class="layer-row" style="color:#aaa;padding-left:18px">zoom in for imagery</div>' +
             '<div class="layer-row" style="color:#888;padding-left:18px;font-size:11px">zoom: ' + zoom + '</div>';
         } else {
@@ -109,7 +110,6 @@
 
     const layerInfo = new LayerInfoControl();
     layerInfo.addTo(map);
-    map.on('zoomend', function() { layerInfo.update(); });
 
     const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
@@ -119,38 +119,48 @@
     });
     osm.addTo(map);
 
-    // COG tile footprints — shown at zoom < 18
     let footprintsLayer = null;
-
+    let ogcApiBase = null;
     const canvasRenderer = L.canvas();
 
-    function loadFootprints(baseUrl) {
-      const url = new URL(baseUrl).origin + '/tile_extents.geojson';
+    function fetchFootprints() {
+      if (map.getZoom() >= 18 || !ogcApiBase) return;
+
+      const b = map.getBounds();
+      const bbox = b.getWest().toFixed(6) + ',' + b.getSouth().toFixed(6) + ',' +
+                   b.getEast().toFixed(6) + ',' + b.getNorth().toFixed(6);
+      const url = ogcApiBase + '/collections/cog-extents/items?f=json&bbox=' + bbox + '&limit=10000';
+
       fetch(url)
         .then(r => r.json())
         .then(data => {
-          if (footprintsLayer) map.removeLayer(footprintsLayer);
-          footprintsLayer = L.geoJSON(data, {
-            renderer: canvasRenderer,
-            style: {
-              color: '#e06020',
-              weight: 1,
-              fillOpacity: 0.05,
-              fillColor: '#e06020'
-            }
-          });
-          function updateFootprints() {
-            if (map.getZoom() < 18) {
-              if (!map.hasLayer(footprintsLayer)) footprintsLayer.addTo(map);
-            } else {
-              if (map.hasLayer(footprintsLayer)) map.removeLayer(footprintsLayer);
-            }
+          if (map.getZoom() >= 18) return;
+          if (footprintsLayer) {
+            footprintsLayer.clearLayers();
+            footprintsLayer.addData(data);
+          } else {
+            footprintsLayer = L.geoJSON(data, {
+              renderer: canvasRenderer,
+              style: { color: '#e06020', weight: 1, fillOpacity: 0.05, fillColor: '#e06020' }
+            });
+            footprintsLayer.addTo(map);
           }
-          map.on('zoomend', updateFootprints);
-          updateFootprints();
+          layerInfo.update(data.features ? data.features.length : 0);
         })
-        .catch(err => console.warn('Could not load tile extents:', err));
+        .catch(err => console.warn('OGC API footprints error:', err));
     }
+
+    function onMoveEnd() {
+      layerInfo.update();
+      const zoom = map.getZoom();
+      if (zoom >= 18) {
+        if (footprintsLayer) { map.removeLayer(footprintsLayer); footprintsLayer = null; }
+      } else {
+        fetchFootprints();
+      }
+    }
+
+    map.on('moveend', onMoveEnd);
 
     // WMS imagery layer — shown at zoom >= 18
     let imageryLayer = null;
@@ -170,10 +180,11 @@
     function applyUrl() {
       const url = document.getElementById('wms-url').value.trim();
       if (!url) return;
+      ogcApiBase = new URL(url).origin + '/mapserv/nz-imagery/ogcapi';
       if (imageryLayer) map.removeLayer(imageryLayer);
       imageryLayer = buildWmsLayer(url);
       imageryLayer.addTo(map);
-      loadFootprints(url);
+      fetchFootprints();
     }
 
     document.getElementById('apply-btn').addEventListener('click', applyUrl);

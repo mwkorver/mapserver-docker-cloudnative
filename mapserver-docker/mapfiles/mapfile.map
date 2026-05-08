@@ -46,6 +46,24 @@ MAP
   CONFIG "CPL_VSIL_CURL_ALLOWED_EXTENSIONS" ".tiff,.tif"
 
   LAYER
+    NAME "cog-extents"
+    TYPE POLYGON
+    STATUS ON
+    CONNECTIONTYPE OGR
+    CONNECTION "/usr/src/mapfiles/tile_extents.geojson"
+    PROJECTION
+      "init=epsg:4326"
+    END
+    METADATA
+      "ows_title"          "COG Tile Extents"
+      "ows_abstract"       "Auckland 2024 COG tile footprints"
+      "gml_include_items"  "all"
+      "ows_enable_request" "*"
+      "ows_maxfeatures"    "10000"
+    END
+  END
+
+  LAYER
     NAME "auckland-2024"
     TYPE RASTER
     STATUS ON
