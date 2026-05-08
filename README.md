@@ -1,124 +1,115 @@
-Abstract
-========
+# mapserver-docker-cloudnative
 
-Mapserver >= 7.0 can render imagery stored in an AWS S3 bucket using a
-file handler provided by GDAL >= 2.1. Two file handlers are available
-`/vsicurl/` and `/vsis3/`. These handlers make use of [HTTP GET range
-requests](https://tools.ietf.org/html/rfc7233) to transfer the minimum
-data required.  When images are properly prepared, access via the vsi
-drivers can be highly performant.
+> This repo is based on the original work by [pedros007](https://github.com/pedros007/mapserver-docker). Thanks to Pedro for laying the foundation.
 
-VSI file handlers
-=================
-Before configuring Mapserver to render imagery stored in an S3 bucket,
-ensure that `gdalinfo` can access the files on the command line.
+A cloud-native MapServer deployment for serving Cloud Optimized GeoTIFFs (COGs) from AWS S3 via WMS. Built for AWS Fargate (ARM64/Graviton), with a GitHub Actions CI/CD pipeline to ECR.
 
-- [/vsicurl/](http://gdal.org/cpl__vsi_8h.html#a4f791960f2d86713d16e99e9c0c36258)
-  can read from a static website, for example one hosted on S3.  For
-  example, [this file from the GDAL test suite](https://github.com/OSGeo/gdal/blob/master/autotest/gdrivers/data/gtiff/int8.tif)
-  can be accessed via its /vsicurl/ driver.
+**Stack:** MapServer 8.6.3 · GDAL 3.12.4 · nginx · FastCGI · supervisord · Ubuntu 24.04
 
-        gdalinfo /vsicurl/https://github.com/OSGeo/gdal/raw/86193bf5942fb63b91b06a18df78efc73a2d869b/autotest/gdrivers/data/gtiff/int8.tif
+---
 
-- [/vsis3/](https://gdal.org/en/stable/user/virtual_file_systems.html#vsis3)
-  can be used to read from buckets which require AWS credentials.  The
-  vsis3 driver should fetch properly configured
-  credentials. Credential management is out of scope for this
-  document.
+## How it works
 
-Preparing imagery
-=================
+1. **Build a VRT mosaic once** — `scripts/build_vrt.py` reads COG headers in parallel from S3 and produces a single VRT XML file referencing all tiles.
+2. **Store the VRT in S3** — upload it to your private bucket.
+3. **Container downloads VRT at startup** — set `VRT_S3_URI` and the entrypoint fetches it before MapServer starts.
+4. **MapServer serves WMS** — GDAL reads COG tiles on demand via `/vsis3/` range requests, using a 256 MB in-process cache.
 
-The format & layout of your data have a critical impact on Mapserver
-performance.  This is especially important when using the vsicurl
-drivers. To achieve high performance, you need to minimize the amount
-of data that needs to be transferred.  The [GDAL COG
-driver](https://gdal.org/en/stable/drivers/raster/cog.html) puts
-GeoTIFF data in the optimal format for random access over /vsicurl/.
-Details of this format are outside the scope of this document.
- 
-Layer configuration
-===================
+---
 
-This section documents how to configure a
-[mapfile](http://mapserver.org/mapfile/map.html) for /vsicurl/ data.
+## Quick start (local)
 
-Single image
-------------
+### Prerequisites
 
-To have Mapserver render from a single source image, set the `DATA` to
-the `/vsicurl/` or `/vsis3/` path in the LAYER object of your mapfile:
+- Docker Desktop
+- AWS credentials with read access to the COG bucket and read/write to your VRT bucket
 
-    	LAYER
-    		NAME		landsat_tile
-    		DATA		"/vsicurl/https://github.com/OSGeo/gdal/raw/86193bf5942fb63b91b06a18df78efc73a2d869b/autotest/gdrivers/data/gtiff/int8.tif"
-    		TYPE		RASTER
-    	END
+### 1. Build the VRT
 
-Many images
------------
+```bash
+eval $(aws configure export-credentials --format env)
 
-[gdaltindex](https://gdal.org/en/stable/programs/gdaltindex.html) can
-point to files having `/vsicurl/` paths.  For example:
+docker run --rm --platform linux/arm64 \
+  -e AWS_ACCESS_KEY_ID \
+  -e AWS_SECRET_ACCESS_KEY \
+  -e AWS_SESSION_TOKEN \
+  -v $(pwd)/data:/output \
+  <your-image> python3 /scripts/build_vrt.py
 
-    gdaltindex tindex.gpkg /vsis3/landsat-pds/L8/021/036/LC80210362016114LGN00/LC80210362016114LGN00_B2.TIF /vsis3/landsat-pds/L8/021/036/LC80210362016114LGN00/LC80210362016114LGN00_B3.TIF
+aws s3 cp data/auckland_2024.vrt s3://<your-bucket>/auckland_2024.vrt
+```
 
-Once you have the tile index, set your LAYER like so:
+Edit `BUCKET`, `PREFIX`, and `OUTPUT` at the top of `scripts/build_vrt.py` to point at your data.
 
-    	LAYER
-    		NAME		landsat_tiles
-    		TILEINDEX       "/usr/src/mapfiles/tile_index.gpkg"
-    		TYPE		RASTER
-    	END
+### 2. Run the container
 
-Performance Improvement: VSI Curl options
------------------------------------------
+```bash
+eval $(aws configure export-credentials --format env)
 
-Some GDAL config options have an outsized impact on performance.
-These are well summarized at [TiTiler Performance
-Tuning](https://developmentseed.org/titiler/advanced/performance_tuning/).
+docker run --rm \
+  -e AWS_ACCESS_KEY_ID \
+  -e AWS_SECRET_ACCESS_KEY \
+  -e AWS_SESSION_TOKEN \
+  -e VRT_S3_URI=s3://<your-bucket>/auckland_2024.vrt \
+  -p 8080:80 \
+  <your-image>
+```
 
+### 3. Test WMS
 
-For example, consider:
-- [CPL_VSIL_CURL_ALLOWED_EXTENSIONS](https://trac.osgeo.org/gdal/wiki/ConfigOptions#CPL_VSIL_CURL_ALLOWED_EXTENSIONS).  Use this to restrict only the file extensions you expect to actually need.
-- [VSI_CACHE](https://trac.osgeo.org/gdal/wiki/ConfigOptions#VSI_CACHE) results in less network traffic (even for simple things like `gdalinfo`)!
-- [VSI_CACHE_SIZE](https://trac.osgeo.org/gdal/wiki/ConfigOptions#VSI_CACHE) size of cache in bytes.
-- [GDAL_DISABLE_READDIR_ON_OPEN](https://trac.osgeo.org/gdal/wiki/ConfigOptions#GDAL_DISABLE_READDIR_ON_OPEN) might result in fewer HTTP GET requests when opening the GeoTIFF header.
+GetCapabilities:
+```
+http://localhost:8080/mapserv?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetCapabilities
+```
 
-Example configuration for the MAP object of your MAPFILE:
+GetMap (Auckland 2024, EPSG:2193):
+```
+http://localhost:8080/mapserv?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=auckland-2024&CRS=EPSG:2193&BBOX=5920000,1750000,5930000,1760000&WIDTH=256&HEIGHT=256&FORMAT=image/png
+```
 
-	CONFIG "CPL_VSIL_CURL_ALLOWED_EXTENSIONS" ".tif"
-	CONFIG "VSI_CACHE" "TRUE"
-	# cache size in bytes
-	CONFIG "VSI_CACHE_SIZE" "50000000"
-	CONFIG "GDAL_DISABLE_READDIR_ON_OPEN" "TRUE"
+> **WMS 1.3.0 axis order:** EPSG:2193 (NZTM) uses Northing,Easting order — BBOX is `minN,minE,maxN,maxE`.
 
-Docker Image
-============
+### 4. Open the viewer
 
-This repo includes a Docker image that can be used to render GeoTIFFs stored in AWS S3 via Mapserver-7.0.2 and gdal-2.1.1.
+Open `viewer/index.html` in your browser. It loads a Leaflet map with the WMS layer pre-configured for `http://localhost:8080/mapserv`. The URL can be changed in the toolbar to point at any deployed instance.
 
-    docker build -t mapserver-docker:latest
-    docker run --rm -it -p 8000:80 -v /Users/pschmitt/src/mapserver-docker/mapfiles:/usr/src/mapfiles mapserver-docker:latest
+---
 
-A sample mapfile is available at `mapfiles/mapfile.map`.
+## CI/CD
 
-Once the container is running
+GitHub Actions builds and pushes the image to ECR on every push to `main`. Authentication uses OIDC — no long-lived AWS keys are stored in GitHub.
 
-Render imagery with a WMS client like QGIS, OpenLayers or manually issue a request for a single tile:
+**Required GitHub Actions variables:**
+- `AWS_ACCOUNT_ID` — your 12-digit AWS account ID
 
-    http://localhost:8000/mapserv?LAYERS=raster_layer&FORMAT=image%2Fpng&MAP=/usr/src/mapfiles/mapfile.map&TRANSPARENT=true&SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&STYLES=&SRS=EPSG%3A4326&BBOX=57.00,27.05,57.01,27.06&WIDTH=256&HEIGHT=256
+**Required AWS setup:**
+- IAM role `github-actions-mapserver` with OIDC trust policy (see `iam/trust-policy.json`)
+- ECR repo named `mapserver-docker-cloudnative`
 
-Assorted Docs & Links
-=====================
+See `.github/workflows/build-push.yml` for the full pipeline.
+
+---
+
+## GDAL performance config
+
+Set in `mapfile.map` (MAP block):
+
+```
+CONFIG "AWS_NO_SIGN_REQUEST" "YES"        # omit for private buckets
+CONFIG "VSI_CACHE" "TRUE"
+CONFIG "VSI_CACHE_SIZE" "268435456"       # 256 MB per FastCGI worker
+CONFIG "GDAL_DISABLE_READDIR_ON_OPEN" "TRUE"
+CONFIG "CPL_VSIL_CURL_ALLOWED_EXTENSIONS" ".tiff,.tif"
+```
+
+For best performance, deploy in the same AWS region as your S3 bucket. The latency difference between local and in-region is substantial for range-request-heavy COG access.
+
+---
+
+## Links
 
 - [GDAL Virtual File Systems](https://gdal.org/en/stable/user/virtual_file_systems.html)
-- [GDAL Cloud Optimized GeoTIFF driver](https://gdal.org/en/stable/drivers/raster/cog.html)
+- [GDAL Cloud Optimized GeoTIFF](https://gdal.org/en/stable/drivers/raster/cog.html)
 - [TiTiler GDAL Performance Tuning](https://developmentseed.org/titiler/advanced/performance_tuning/)
-- [Mapserver Virtual File System](http://mapserver.org/input/virtual-file.html)
- 
-Thanks to [Even Rouault](http://erouault.blogspot.com/) for his work
-on /vsis3/ support, the [Mapserver](http://www.mapserver.org/) team
-for an excellent tool and the
-[mapserver-users](https://lists.osgeo.org/listinfo/mapserver-users)
-mailing list!
+- [MapServer WMS](https://mapserver.org/ogc/wms_server.html)
+- [NZ Imagery on AWS Open Data](https://registry.opendata.aws/nz-imagery/)
