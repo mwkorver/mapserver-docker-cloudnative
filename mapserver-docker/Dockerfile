@@ -67,20 +67,26 @@ RUN apt-get update && apt-get upgrade -y && \
     libfreetype6 \
     libharfbuzz0b \
     libprotobuf-c1 \
-    libpcre2-posix3 && \
+    libpcre2-posix3 \
+    unzip && \
+    curl "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o "/tmp/awscliv2.zip" && \
+    unzip -q -d /tmp /tmp/awscliv2.zip && \
+    /tmp/aws/install && \
+    rm -rf /tmp/awscliv2.zip /tmp/aws && \
     apt-get autoremove -y && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
 ADD etc /etc
-RUN ln -sf /etc/nginx/sites-available/mapserver_proxy.conf /etc/nginx/sites-enabled/default
+RUN ln -sf /etc/nginx/sites-available/mapserver_proxy.conf /etc/nginx/sites-enabled/default && \
+    chmod +x /etc/entrypoint.sh
 COPY mapfiles /usr/src/mapfiles
 
 EXPOSE 80
 
 ENV MAPSERVER_CONFIG_FILE=/etc/mapserver/mapserver.conf
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD curl -sf "http://localhost/mapserv?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetCapabilities&MAP=/usr/src/mapfiles/mapfile.map" || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD curl -sf "http://localhost/mapserv?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetCapabilities" || exit 1
 
-CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/supervisord.conf"]
+CMD ["/etc/entrypoint.sh"]
