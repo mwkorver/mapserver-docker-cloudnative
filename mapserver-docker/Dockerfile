@@ -24,7 +24,8 @@ RUN apt-get update && \
     libfreetype6-dev \
     libharfbuzz-dev \
     protobuf-c-compiler \
-    libprotobuf-c-dev && \
+    libprotobuf-c-dev \
+    nlohmann-json3-dev && \
     curl https://download.osgeo.org/mapserver/mapserver-${MAPSERVER_VERSION}.tar.gz | tar zx -C /tmp && \
     mkdir /tmp/mapserver-${MAPSERVER_VERSION}/build && \
     cd /tmp/mapserver-${MAPSERVER_VERSION}/build && \
@@ -34,6 +35,7 @@ RUN apt-get update && \
       -DWITH_RSVG=1 \
       -DWITH_CLIENT_WMS=1 \
       -DWITH_CLIENT_WFS=1 \
+      -DWITH_OGC_API_ENABLED=1 \
       -DPROJ_LIBRARY=/usr/local/lib/libinternalproj.so \
       -DCMAKE_C_FLAGS=-DPROJ_RENAME_SYMBOLS && \
     make -j $(nproc) && \
@@ -46,6 +48,7 @@ ARG TARGETARCH
 
 COPY --from=builder /usr/local/bin/mapserv /usr/local/bin/mapserv
 COPY --from=builder /usr/local/lib/libmapserver* /usr/local/lib/
+COPY --from=builder /usr/local/share/mapserver /usr/local/share/mapserver
 
 RUN apt-get update && apt-get upgrade -y && \
     env DEBIAN_FRONTEND=noninteractive \
