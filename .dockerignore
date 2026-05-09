@@ -1,0 +1,36 @@
+# Git
+.git
+.gitignore
+.github
+
+# Editor / IDE
+.claude
+.vscode
+.idea
+*.swp
+*~
+
+# Docs / repo metadata
+README.md
+LICENSE
+
+# Local build artifacts and data
+data/
+cdk/
+cdk.out/
+*.gpkg
+*.geojson
+
+# Tooling
+scripts/
+viewer/
+iam/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# OS
+.DS_Store

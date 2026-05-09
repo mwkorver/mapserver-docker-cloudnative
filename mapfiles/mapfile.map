@@ -32,10 +32,11 @@ MAP
     METADATA
       "ows_title"           "Auckland 2024 Imagery"
       "ows_abstract"        "Auckland 2024 0.075m aerial imagery mosaic (17739 COGs)"
-      "ows_onlineresource"  "http://mapserver-1286789374.us-west-2.elb.amazonaws.com/mapserv"
+      "ows_onlineresource"  "http://mapserver-392429085.us-west-2.elb.amazonaws.com/mapserv"
       "ows_srs"             "EPSG:2193 EPSG:4326 EPSG:3857"
       "ows_enable_request"  "*"
       "F_enable_request"    "*"
+      "wms_allow_getmap_without_styles" "true"
     END
   END
 

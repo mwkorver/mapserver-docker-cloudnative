@@ -75,6 +75,36 @@ Open `viewer/index.html` in your browser. It loads a Leaflet map with the WMS la
 
 ---
 
+## Infrastructure
+
+The full AWS deployment (VPC, ALB, ECS Fargate, IAM, CloudWatch, autoscaling)
+is defined in [cdk/](cdk/). One `cdk deploy` provisions everything from
+scratch.
+
+```bash
+cd cdk && pip install -r requirements.txt && cdk deploy
+```
+
+See [cdk/README.md](cdk/README.md) for prereqs and migration notes.
+
+---
+
+## Runtime config
+
+The container reads three optional env vars at startup. Each downloads a
+file from S3, overwriting the bundled default:
+
+| Env var          | Target path                            | Purpose                       |
+| ---------------- | -------------------------------------- | ----------------------------- |
+| `MAPFILE_S3_URI` | `/usr/src/mapfiles/mapfile.map`        | MapServer config              |
+| `VRT_S3_URI`     | `/usr/src/mapfiles/mosaic.vrt`         | GDAL VRT mosaicing the COGs   |
+| `EXTENTS_S3_URI` | `/usr/src/mapfiles/tile_extents.geojson` | OGC API Features layer source |
+
+This lets you change the mapfile or rebuild the VRT without rebuilding the
+image — upload to S3, then force a new ECS deployment.
+
+---
+
 ## CI/CD
 
 GitHub Actions builds and pushes the image to ECR on every push to `main`. Authentication uses OIDC — no long-lived AWS keys are stored in GitHub.
