@@ -3,26 +3,33 @@ from aws_cdk import (
     Duration,
     CfnOutput,
     RemovalPolicy,
+    BundlingOptions,
+    CustomResource,
     aws_ec2 as ec2,
     aws_ecs as ecs,
     aws_ecr as ecr,
     aws_elasticloadbalancingv2 as elbv2,
     aws_iam as iam,
+    aws_lambda as lambda_,
     aws_logs as logs,
+    aws_rds as rds,
     aws_s3 as s3,
     aws_applicationautoscaling as appscaling,
+    custom_resources as cr,
 )
 from constructs import Construct
 
 
 class MapserverStack(Stack):
     """
-    Cloud-native MapServer on AWS Fargate.
+    Cloud-native MapServer on AWS Fargate, backed by RDS PostgreSQL/PostGIS.
 
     Resources:
       - VPC (2 AZ, public subnets) with S3 gateway endpoint
-      - ECR repo (or reference existing)
-      - S3 config bucket (referenced, assumed pre-existing)
+      - ECR repo (referenced)
+      - S3 config bucket (referenced)
+      - RDS PostgreSQL db.t4g.micro with PostGIS, pg_stat_statements, pg_trgm
+      - DB init Lambda (custom resource): enables extensions, creates schema
       - ECS Fargate cluster + service (ARM64, 1 vCPU / 4 GB)
       - ALB (HTTP:80) with WMS GetCapabilities health check
       - CloudWatch log group + autoscaling on CPU
@@ -78,6 +85,108 @@ class MapserverStack(Stack):
             removal_policy=RemovalPolicy.DESTROY,
         )
 
+        # --- RDS PostgreSQL + PostGIS -------------------------------------
+        # Custom parameter group enables pg_stat_statements via shared_preload_libraries
+        db_params = rds.ParameterGroup(
+            self,
+            "DbParams",
+            engine=rds.DatabaseInstanceEngine.postgres(
+                version=rds.PostgresEngineVersion.VER_17_2,
+            ),
+            parameters={
+                "shared_preload_libraries": "pg_stat_statements",
+                "track_activity_query_size": "4096",
+            },
+        )
+
+        db_sg = ec2.SecurityGroup(
+            self,
+            "DbSg",
+            vpc=vpc,
+            description="RDS PostgreSQL, in-VPC only",
+            allow_all_outbound=False,
+        )
+
+        db = rds.DatabaseInstance(
+            self,
+            "Db",
+            engine=rds.DatabaseInstanceEngine.postgres(
+                version=rds.PostgresEngineVersion.VER_17_2,
+            ),
+            instance_type=ec2.InstanceType.of(
+                ec2.InstanceClass.BURSTABLE4_GRAVITON,
+                ec2.InstanceSize.MICRO,
+            ),
+            vpc=vpc,
+            vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
+            publicly_accessible=False,
+            allocated_storage=20,
+            storage_type=rds.StorageType.GP3,
+            backup_retention=Duration.days(1),
+            delete_automated_backups=True,
+            deletion_protection=False,
+            removal_policy=RemovalPolicy.DESTROY,
+            credentials=rds.Credentials.from_generated_secret("postgres"),
+            database_name="mapserver",
+            parameter_group=db_params,
+            security_groups=[db_sg],
+        )
+
+        # --- DB init Lambda (custom resource) -----------------------------
+        init_sg = ec2.SecurityGroup(
+            self,
+            "DbInitSg",
+            vpc=vpc,
+            description="DB init lambda",
+            allow_all_outbound=True,
+        )
+        db.connections.allow_default_port_from(init_sg, "DB init lambda")
+
+        init_fn = lambda_.Function(
+            self,
+            "DbInit",
+            runtime=lambda_.Runtime.PYTHON_3_12,
+            architecture=lambda_.Architecture.ARM_64,
+            handler="handler.main",
+            code=lambda_.Code.from_asset(
+                "lambda/db_init",
+                bundling=BundlingOptions(
+                    image=lambda_.Runtime.PYTHON_3_12.bundling_image,
+                    command=[
+                        "bash",
+                        "-c",
+                        "pip install -r requirements.txt -t /asset-output && cp -au . /asset-output",
+                    ],
+                ),
+            ),
+            timeout=Duration.minutes(2),
+            memory_size=512,
+            vpc=vpc,
+            vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
+            security_groups=[init_sg],
+            allow_public_subnet=True,
+            environment={
+                # Pass secret values directly — Lambda in VPC has no NAT and
+                # no Secrets Manager endpoint, so it cannot call the API.
+                # CloudFormation resolves these at deploy time.
+                "DB_HOST": db.instance_endpoint.hostname,
+                "DB_PORT": str(db.instance_endpoint.port),
+                "DB_NAME": "mapserver",
+                "DB_USER": db.secret.secret_value_from_json("username").unsafe_unwrap(),
+                "DB_PASSWORD": db.secret.secret_value_from_json("password").unsafe_unwrap(),
+            },
+        )
+
+        provider = cr.Provider(self, "DbInitProvider", on_event_handler=init_fn)
+        # Bump `version` to force the custom resource to re-run on a deploy
+        # (e.g., after editing INIT_SQL in the lambda).
+        CustomResource(
+            self,
+            "DbInitTrigger",
+            service_token=provider.service_token,
+            properties={"version": "1"},
+        )
+
         # --- ECS cluster, task, service -----------------------------------
         cluster = ecs.Cluster(self, "Cluster", cluster_name="mapserver", vpc=vpc)
 
@@ -93,9 +202,9 @@ class MapserverStack(Stack):
             ),
         )
 
-        # Task role: read-only access to the config bucket (mapfile, VRT,
-        # tile_extents) and the COG bucket if it's the same one.
+        # Task role: read-only S3 for the mapfile, plus read the DB secret
         config_bucket.grant_read(task_def.task_role)
+        db.secret.grant_read(task_def.task_role)
 
         container = task_def.add_container(
             "mapserver",
@@ -104,9 +213,9 @@ class MapserverStack(Stack):
                 stream_prefix="ecs", log_group=log_group
             ),
             environment={
-                "VRT_S3_URI": f"s3://{config_bucket_name}/auckland_2024.vrt",
-                "EXTENTS_S3_URI": f"s3://{config_bucket_name}/tile_extents.geojson",
                 "MAPFILE_S3_URI": f"s3://{config_bucket_name}/mapfile.map",
+                "DB_SECRET_ARN": db.secret.secret_arn,
+                "AWS_REGION": self.region,
             },
         )
         container.add_port_mappings(ecs.PortMapping(container_port=80))
@@ -118,6 +227,7 @@ class MapserverStack(Stack):
             description="mapserver Fargate tasks",
             allow_all_outbound=True,
         )
+        db.connections.allow_default_port_from(service_sg, "Fargate to DB")
 
         service = ecs.FargateService(
             self,
@@ -183,3 +293,6 @@ class MapserverStack(Stack):
         CfnOutput(self, "AlbDnsName", value=alb.load_balancer_dns_name)
         CfnOutput(self, "WmsUrl", value=f"http://{alb.load_balancer_dns_name}/mapserv")
         CfnOutput(self, "EcrRepoUri", value=ecr_repo.repository_uri)
+        CfnOutput(self, "DbEndpoint", value=db.instance_endpoint.hostname)
+        CfnOutput(self, "DbSecretArn", value=db.secret.secret_arn)
+        CfnOutput(self, "DbInstanceId", value=db.instance_identifier)

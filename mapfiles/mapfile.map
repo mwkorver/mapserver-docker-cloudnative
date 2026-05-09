@@ -31,8 +31,8 @@ MAP
   WEB
     METADATA
       "ows_title"           "Auckland 2024 Imagery"
-      "ows_abstract"        "Auckland 2024 0.075m aerial imagery mosaic (17739 COGs)"
-      "ows_onlineresource"  "http://mapserver-392429085.us-west-2.elb.amazonaws.com/mapserv"
+      "ows_abstract"        "Auckland 2024 0.075m aerial imagery mosaic"
+      "ows_onlineresource"  "http://${PUBLIC_HOST}/mapserv"
       "ows_srs"             "EPSG:2193 EPSG:4326 EPSG:3857"
       "ows_enable_request"  "*"
       "F_enable_request"    "*"
@@ -43,27 +43,34 @@ MAP
   CONFIG "MS_ERRORFILE" "stderr"
   CONFIG "AWS_NO_SIGN_REQUEST" "YES"
   CONFIG "VSI_CACHE" "TRUE"
-  CONFIG "VSI_CACHE_SIZE" "67108864"
+  CONFIG "VSI_CACHE_SIZE" "134217728"
   CONFIG "GDAL_DISABLE_READDIR_ON_OPEN" "TRUE"
+  CONFIG "GDAL_HTTP_MULTIPLEX" "YES"
+  CONFIG "GDAL_HTTP_VERSION" "2"
+  CONFIG "GDAL_HTTP_MERGE_CONSECUTIVE_RANGES" "YES"
   CONFIG "CPL_VSIL_CURL_ALLOWED_EXTENSIONS" ".tiff,.tif"
 
+  # Vector layer over the same cog_index table — exposes COG footprints via
+  # OGC API Features and WFS.
   LAYER
     NAME "cog-extents"
     TYPE POLYGON
     STATUS ON
     TEMPLATE "unused"
     EXTENT 174.5 -37.1 175.2 -36.5
-    DATA "/usr/src/mapfiles/tile_extents"
+    CONNECTIONTYPE POSTGIS
+    CONNECTION "host=${DB_HOST} port=${DB_PORT} dbname=${DB_NAME} user=${DB_USER} password=${DB_PASS}"
+    DATA "geom FROM cog_index USING UNIQUE id USING SRID=2193"
     PROJECTION
-      "init=epsg:4326"
+      "init=epsg:2193"
     END
     METADATA
       "ows_title"          "COG Tile Extents"
-      "ows_abstract"       "Auckland 2024 COG tile footprints"
+      "ows_abstract"       "COG tile footprints"
       "ows_extent"         "174.5 -37.1 175.2 -36.5"
-      "ows_srs"            "EPSG:4326 EPSG:3857"
+      "ows_srs"            "EPSG:2193 EPSG:4326 EPSG:3857"
       "gml_include_items"  "all"
-      "gml_featureid"      "file"
+      "gml_featureid"      "id"
       "gml_geometries"     "msGeometry"
       "gml_msGeometry_type" "polygon"
       "ows_enable_request" "*"
@@ -73,12 +80,17 @@ MAP
     END
   END
 
+  # Raster layer driven by a PostGIS tileindex — MapServer issues a spatial
+  # query against cog_index for each request and reads only the intersecting
+  # COGs from S3. No VRT, no shapefile tileindex.
   LAYER
     NAME "auckland-2024"
     TYPE RASTER
     STATUS ON
-    DATA "/usr/src/mapfiles/mosaic.vrt"
+    TILEINDEX "cog-extents"
+    TILEITEM "location"
     PROCESSING "BANDS=1,2,3"
+    PROCESSING "RESAMPLE=AVERAGE"
     PROJECTION
       "init=epsg:2193"
     END
