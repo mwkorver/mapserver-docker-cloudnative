@@ -1,0 +1,8 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+cdk.out/
+.cdk.staging/
+*.swp
+.DS_Store
