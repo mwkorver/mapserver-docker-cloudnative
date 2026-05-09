@@ -1,55 +1,31 @@
-FROM ghcr.io/osgeo/gdal:ubuntu-full-3.10.3
+# Stage 1: build MapServer from source
+FROM ghcr.io/osgeo/gdal:ubuntu-full-3.12.4 AS builder
 
-ARG MAPSERVER_VERSION=8.4.0
+ARG MAPSERVER_VERSION=8.6.3
 
-RUN \
-# AWS CLI can be helpful with debugging
-    curl "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o "/tmp/awscliv2.zip" && \
-    unzip -q -d /tmp /tmp/awscliv2.zip && \
-    /tmp/aws/install && \
-    rm -rf /tmp/awscliv2.zip /tmp/aws && \
-# Use package manager to install dependencies
-    apt-get update && apt-get upgrade -y && \
-# don't allow tzdata to prompt the user for a setting.
+RUN apt-get update && \
     env DEBIAN_FRONTEND=noninteractive \
     apt-get install -y --no-install-recommends \
-    nginx \
-    supervisor \
-# Might be helpful for debugging
-    emacs-nox \
-    less \
-    postgresql-client \
-    procps \
-    strace \
-# MapServer dependencies
     build-essential \
     cmake \
+    curl \
     libcurl4-gnutls-dev \
-    libfcgi0ldbl \
     libfcgi-dev \
     libgeos-dev \
     libpq-dev \
-    libxml2 \
     libxml2-dev \
     libpng-dev \
-    zlib1g \
     zlib1g-dev \
-    libjpeg-turbo8 \
     libjpeg-turbo8-dev \
     libgif-dev \
-    libcairo2 \
     libcairo2-dev \
-    librsvg2-2 \
     librsvg2-dev \
-    libfribidi0 \
     libfribidi-dev \
-    libfreetype6 \
     libfreetype6-dev \
-    libharfbuzz0b \
     libharfbuzz-dev \
     protobuf-c-compiler \
-    libprotobuf-c-dev && \
-# Build MapServer using libproj from the GDAL Docker
+    libprotobuf-c-dev \
+    nlohmann-json3-dev && \
     curl https://download.osgeo.org/mapserver/mapserver-${MAPSERVER_VERSION}.tar.gz | tar zx -C /tmp && \
     mkdir /tmp/mapserver-${MAPSERVER_VERSION}/build && \
     cd /tmp/mapserver-${MAPSERVER_VERSION}/build && \
@@ -59,21 +35,63 @@ RUN \
       -DWITH_RSVG=1 \
       -DWITH_CLIENT_WMS=1 \
       -DWITH_CLIENT_WFS=1 \
-      -DPROJ_LIBRARY=/usr/local/lib/libinternalproj.so  \
+      -DWITH_OGC_API_ENABLED=1 \
+      -DPROJ_LIBRARY=/usr/local/lib/libinternalproj.so \
       -DCMAKE_C_FLAGS=-DPROJ_RENAME_SYMBOLS && \
-    make -j $(grep --count ^processor /proc/cpuinfo) && \
+    make -j $(nproc) && \
     make install && \
-# Cleanup
+    rm -rf /tmp/mapserver-${MAPSERVER_VERSION}
+
+# Stage 2: runtime image
+FROM ghcr.io/osgeo/gdal:ubuntu-full-3.12.4
+ARG TARGETARCH
+
+COPY --from=builder /usr/local/bin/mapserv /usr/local/bin/mapserv
+COPY --from=builder /usr/local/lib/libmapserver* /usr/local/lib/
+COPY --from=builder /usr/local/share/mapserver /usr/local/share/mapserver
+
+RUN apt-get update && apt-get upgrade -y && \
+    env DEBIAN_FRONTEND=noninteractive \
+    apt-get install -y --no-install-recommends \
+    nginx \
+    supervisor \
+    curl \
+    libfcgi0t64 \
+    libcurl3t64-gnutls \
+    libgeos-c1v5 \
+    libpq5 \
+    libxml2 \
+    libpng16-16t64 \
+    zlib1g \
+    libjpeg-turbo8 \
+    libgif7 \
+    libcairo2 \
+    librsvg2-2 \
+    libfribidi0 \
+    libfreetype6 \
+    libharfbuzz0b \
+    libprotobuf-c1 \
+    libpcre2-posix3 \
+    unzip && \
+    AWSCLI_ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "aarch64" || echo "x86_64") && \
+    curl "https://awscli.amazonaws.com/awscli-exe-linux-${AWSCLI_ARCH}.zip" -o "/tmp/awscliv2.zip" && \
+    unzip -q -d /tmp /tmp/awscliv2.zip && \
+    /tmp/aws/install && \
+    rm -rf /tmp/awscliv2.zip /tmp/aws && \
     apt-get autoremove -y && \
     apt-get clean && \
-    rm -rf /var/lib/apt/lists/* /tmp/*
+    rm -rf /var/lib/apt/lists/*
 
 ADD etc /etc
-RUN ln -sf /etc/nginx/sites-available/mapserver_proxy.conf /etc/nginx/sites-enabled/default
+RUN ln -sf /etc/nginx/sites-available/mapserver_proxy.conf /etc/nginx/sites-enabled/default && \
+    chmod +x /etc/entrypoint.sh
 COPY mapfiles /usr/src/mapfiles
 
 EXPOSE 80
 
 ENV MAPSERVER_CONFIG_FILE=/etc/mapserver/mapserver.conf
 
-CMD /usr/bin/supervisord
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD curl -sf "http://localhost/mapserv?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetCapabilities" || exit 1
+
+CMD ["/etc/entrypoint.sh"]
