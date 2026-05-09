@@ -72,6 +72,8 @@ RUN apt-get update && apt-get upgrade -y && \
     libharfbuzz0b \
     libprotobuf-c1 \
     libpcre2-posix3 \
+    gettext-base \
+    jq \
     unzip && \
     AWSCLI_ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "aarch64" || echo "x86_64") && \
     curl "https://awscli.amazonaws.com/awscli-exe-linux-${AWSCLI_ARCH}.zip" -o "/tmp/awscliv2.zip" && \
