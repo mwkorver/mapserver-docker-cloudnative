@@ -38,7 +38,7 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          context: mapserver-docker
+          context: .
           platforms: linux/arm64
           push: ${{ github.event_name == 'push' }}
           tags: |
