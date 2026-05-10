@@ -47,6 +47,11 @@ class MapserverStack(Stack):
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
+        # `cdk deploy -c parked=true` scales Fargate to 0 and stops RDS.
+        # Default is unparked (running). Re-deploy without the flag to wake.
+        parked_ctx = self.node.try_get_context("parked")
+        parked = str(parked_ctx).lower() in ("true", "1", "yes")
+
         # --- Networking ----------------------------------------------------
         vpc = ec2.Vpc(
             self,
@@ -187,6 +192,44 @@ class MapserverStack(Stack):
             properties={"version": "1"},
         )
 
+        # --- One-shot COG loader ------------------------------------------
+        # Manually invoked after stack is up. Reads tile_extents.geojson from
+        # the config bucket, bulk-INSERTs into cog_index. Idempotent on
+        # `location`, safe to re-run.
+        load_fn = lambda_.Function(
+            self,
+            "LoadCogs",
+            runtime=lambda_.Runtime.PYTHON_3_12,
+            architecture=lambda_.Architecture.ARM_64,
+            handler="handler.main",
+            code=lambda_.Code.from_asset(
+                "lambda/load_cogs",
+                bundling=BundlingOptions(
+                    image=lambda_.Runtime.PYTHON_3_12.bundling_image,
+                    command=[
+                        "bash",
+                        "-c",
+                        "pip install -r requirements.txt -t /asset-output && cp -au . /asset-output",
+                    ],
+                ),
+            ),
+            timeout=Duration.minutes(5),
+            memory_size=1024,
+            vpc=vpc,
+            vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
+            security_groups=[init_sg],
+            allow_public_subnet=True,
+            environment={
+                "DB_HOST": db.instance_endpoint.hostname,
+                "DB_PORT": str(db.instance_endpoint.port),
+                "DB_NAME": "mapserver",
+                "DB_USER": db.secret.secret_value_from_json("username").unsafe_unwrap(),
+                "DB_PASSWORD": db.secret.secret_value_from_json("password").unsafe_unwrap(),
+            },
+        )
+
+        CfnOutput(self, "LoadCogsFunctionName", value=load_fn.function_name)
+
         # --- ECS cluster, task, service -----------------------------------
         cluster = ecs.Cluster(self, "Cluster", cluster_name="mapserver", vpc=vpc)
 
@@ -235,7 +278,7 @@ class MapserverStack(Stack):
             service_name="mapserver",
             cluster=cluster,
             task_definition=task_def,
-            desired_count=1,
+            desired_count=0 if parked else 1,
             assign_public_ip=True,
             security_groups=[service_sg],
             health_check_grace_period=Duration.seconds(60),
@@ -281,12 +324,47 @@ class MapserverStack(Stack):
         service_sg.add_ingress_rule(alb_sg, ec2.Port.tcp(80), "ALB to tasks")
 
         # --- Autoscaling ---------------------------------------------------
-        scaling = service.auto_scale_task_count(min_capacity=1, max_capacity=4)
-        scaling.scale_on_cpu_utilization(
-            "CpuScaling",
-            target_utilization_percent=60,
-            scale_in_cooldown=Duration.seconds(60),
-            scale_out_cooldown=Duration.seconds(60),
+        # Skipped when parked — registering a target with min_capacity=1
+        # would override desired_count=0.
+        if not parked:
+            scaling = service.auto_scale_task_count(min_capacity=1, max_capacity=4)
+            scaling.scale_on_cpu_utilization(
+                "CpuScaling",
+                target_utilization_percent=60,
+                scale_in_cooldown=Duration.seconds(60),
+                scale_out_cooldown=Duration.seconds(60),
+            )
+
+        # --- RDS stop/start when parked -----------------------------------
+        # AWS RDS allows stopping a single-AZ instance for up to 7 days; it
+        # auto-restarts after that. The custom resource fires on every deploy
+        # and ignores the "already in this state" error from RDS.
+        rds_action = "stopDBInstance" if parked else "startDBInstance"
+        cr.AwsCustomResource(
+            self,
+            "RdsState",
+            on_create=cr.AwsSdkCall(
+                service="RDS",
+                action=rds_action,
+                parameters={"DBInstanceIdentifier": db.instance_identifier},
+                physical_resource_id=cr.PhysicalResourceId.of("rds-state"),
+                ignore_error_codes_matching="InvalidDBInstanceState",
+            ),
+            on_update=cr.AwsSdkCall(
+                service="RDS",
+                action=rds_action,
+                parameters={"DBInstanceIdentifier": db.instance_identifier},
+                physical_resource_id=cr.PhysicalResourceId.of("rds-state"),
+                ignore_error_codes_matching="InvalidDBInstanceState",
+            ),
+            policy=cr.AwsCustomResourcePolicy.from_statements(
+                [
+                    iam.PolicyStatement(
+                        actions=["rds:StopDBInstance", "rds:StartDBInstance"],
+                        resources=["*"],
+                    ),
+                ]
+            ),
         )
 
         # --- Outputs -------------------------------------------------------
