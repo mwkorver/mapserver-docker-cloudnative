@@ -230,6 +230,48 @@ class MapserverStack(Stack):
 
         CfnOutput(self, "LoadCogsFunctionName", value=load_fn.function_name)
 
+        # --- Perf API (Lambda Function URL) -------------------------------
+        # Returns the most recent 100 WMS GetMap requests for the viewer's
+        # in-page performance panel. No VPC — the Lambda only talks to
+        # CloudWatch Logs Insights via the public regional endpoint.
+        perf_fn = lambda_.Function(
+            self,
+            "PerfApi",
+            runtime=lambda_.Runtime.PYTHON_3_12,
+            architecture=lambda_.Architecture.ARM_64,
+            handler="handler.handler",
+            code=lambda_.Code.from_asset("lambda/perf_api"),
+            timeout=Duration.seconds(30),
+            memory_size=256,
+            environment={
+                "LOG_GROUP": log_group.log_group_name,
+                "WINDOW_HOURS": "1",
+            },
+        )
+        perf_fn.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=[
+                    "logs:StartQuery",
+                    "logs:GetQueryResults",
+                    "logs:StopQuery",
+                ],
+                resources=[
+                    log_group.log_group_arn,
+                    f"{log_group.log_group_arn}:*",
+                ],
+            )
+        )
+
+        perf_url = perf_fn.add_function_url(
+            auth_type=lambda_.FunctionUrlAuthType.NONE,
+            cors=lambda_.FunctionUrlCorsOptions(
+                allowed_origins=["*"],
+                allowed_methods=[lambda_.HttpMethod.GET],
+                allowed_headers=["*"],
+            ),
+        )
+        CfnOutput(self, "PerfApiUrl", value=perf_url.url)
+
         # --- ECS cluster, task, service -----------------------------------
         cluster = ecs.Cluster(self, "Cluster", cluster_name="mapserver", vpc=vpc)
 
