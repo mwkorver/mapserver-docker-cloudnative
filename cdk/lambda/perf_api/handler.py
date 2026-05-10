@@ -21,11 +21,10 @@ fields @timestamp, args, upstream_time_s, status, size
 | limit 100
 """
 
-CORS = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, OPTIONS",
-    "Cache-Control": "no-store",
-}
+# Function URL's CORS config injects Access-Control-* headers automatically.
+# Setting them here too produces duplicate headers and browsers reject the
+# response with "Failed to fetch." Only set non-CORS headers in the Lambda.
+HEADERS = {"Cache-Control": "no-store"}
 
 
 def _query():
@@ -54,7 +53,7 @@ def handler(event, context):
     except Exception as e:
         return {
             "statusCode": 500,
-            "headers": {**CORS, "Content-Type": "application/json"},
+            "headers": {**HEADERS, "Content-Type": "application/json"},
             "body": json.dumps({"error": str(e)}),
         }
 
@@ -81,6 +80,6 @@ def handler(event, context):
     }
     return {
         "statusCode": 200,
-        "headers": {**CORS, "Content-Type": "application/json"},
+        "headers": {**HEADERS, "Content-Type": "application/json"},
         "body": json.dumps(body),
     }
