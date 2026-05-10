@@ -20,8 +20,11 @@ import psycopg
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-DEFAULT_COG_BUCKET = "nz-imagery"
 DEFAULT_COG_PREFIX = "auckland/auckland_2024_0.075m/rgb/2193/"
+# Route through the in-container nginx proxy_cache layer so every FastCGI
+# worker shares one disk-backed cache instead of fragmenting per-process
+# VSI caches. nginx forwards misses to the real S3 endpoint.
+DEFAULT_COG_PROXY = "http://localhost:8001"
 BATCH = 500
 
 # tile_extents.geojson is bundled into the Lambda asset to avoid a VPC
@@ -45,9 +48,9 @@ def _features():
 
 
 def main(event: dict[str, Any], context):
-    cog_bucket = event.get("bucket", DEFAULT_COG_BUCKET)
     cog_prefix = event.get("prefix", DEFAULT_COG_PREFIX)
-    base = f"/vsis3/{cog_bucket}/{cog_prefix}"
+    cog_proxy = event.get("proxy", DEFAULT_COG_PROXY)
+    base = f"/vsicurl/{cog_proxy}/{cog_prefix}"
 
     logger.info("Loading bundled %s, vsi base %s", EXTENTS_PATH, base)
 

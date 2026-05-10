@@ -86,7 +86,9 @@ RUN apt-get update && apt-get upgrade -y && \
 
 ADD etc /etc
 RUN ln -sf /etc/nginx/sites-available/mapserver_proxy.conf /etc/nginx/sites-enabled/default && \
-    chmod +x /etc/entrypoint.sh
+    chmod +x /etc/entrypoint.sh && \
+    mkdir -p /var/cache/nginx/cog && \
+    chown -R www-data:www-data /var/cache/nginx
 COPY mapfiles /usr/src/mapfiles
 
 EXPOSE 80
