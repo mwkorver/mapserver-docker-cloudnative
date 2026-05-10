@@ -35,7 +35,7 @@
       font-size: 13px;
     }
 
-    #apply-btn {
+    #apply-btn, #perf-toggle {
       padding: 4px 10px;
       background: #3388ff;
       color: white;
@@ -44,8 +44,9 @@
       cursor: pointer;
       font-size: 13px;
     }
-
+    #perf-toggle { background: #5a5a5a; }
     #apply-btn:hover { background: #2266cc; }
+    #perf-toggle:hover { background: #3a3a3a; }
 
     #map { height: 100%; width: 100%; }
 
@@ -70,6 +71,99 @@
       border-radius: 2px;
       flex-shrink: 0;
     }
+
+    /* Performance panel */
+    #perf-panel {
+      position: absolute;
+      top: 0;
+      right: 0;
+      width: 360px;
+      height: 100%;
+      background: white;
+      box-shadow: -2px 0 12px rgba(0,0,0,0.2);
+      z-index: 1001;
+      transform: translateX(100%);
+      transition: transform 200ms ease-out;
+      display: flex;
+      flex-direction: column;
+      font-size: 12px;
+    }
+    #perf-panel.open { transform: translateX(0); }
+
+    #perf-header {
+      padding: 12px 14px;
+      border-bottom: 1px solid #e0e0e0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: #f8f8f8;
+    }
+    #perf-header h3 { font-size: 13px; font-weight: 600; color: #333; }
+    #perf-header button {
+      border: 1px solid #ccc;
+      background: white;
+      padding: 3px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    #perf-header button:hover { background: #f0f0f0; }
+
+    #perf-body {
+      padding: 12px 14px;
+      overflow-y: auto;
+      flex: 1;
+    }
+
+    .perf-section { margin-bottom: 16px; }
+    .perf-section h4 {
+      font-size: 11px;
+      font-weight: 600;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 6px;
+    }
+
+    .perf-stats {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 4px 10px;
+      font-variant-numeric: tabular-nums;
+    }
+    .perf-stats .label { color: #666; }
+    .perf-stats .value { color: #222; text-align: right; font-weight: 500; }
+
+    .perf-meta {
+      color: #999;
+      font-size: 11px;
+      margin-top: 4px;
+    }
+
+    table.req-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-variant-numeric: tabular-nums;
+      font-size: 11px;
+    }
+    table.req-table th {
+      text-align: left;
+      color: #888;
+      font-weight: 500;
+      padding: 4px 6px;
+      border-bottom: 1px solid #eee;
+    }
+    table.req-table th.num { text-align: right; }
+    table.req-table td {
+      padding: 3px 6px;
+      border-bottom: 1px solid #f5f5f5;
+      color: #444;
+    }
+    table.req-table td.num { text-align: right; font-feature-settings: "tnum"; }
+    table.req-table .slow { color: #c0392b; }
+    table.req-table .ok { color: #27ae60; }
+
+    .empty { color: #aaa; font-style: italic; padding: 8px 0; }
   </style>
 </head>
 <body>
@@ -77,11 +171,38 @@
     <label>WMS URL:</label>
     <input id="wms-url" type="text" value="http://mapserver-2105006144.us-west-2.elb.amazonaws.com/mapserv" />
     <button id="apply-btn">Apply</button>
+    <button id="perf-toggle">Perf</button>
   </div>
   <div id="map"></div>
 
+  <div id="perf-panel">
+    <div id="perf-header">
+      <h3>Performance</h3>
+      <div>
+        <button id="perf-refresh">Refresh</button>
+        <button id="perf-close">×</button>
+      </div>
+    </div>
+    <div id="perf-body">
+      <div class="perf-section">
+        <h4>Server-side (MapServer)</h4>
+        <div id="server-stats" class="empty">click Refresh</div>
+      </div>
+      <div class="perf-section">
+        <h4>Client-side (Browser → ALB → Browser)</h4>
+        <div id="client-stats" class="empty">pan/zoom to collect samples</div>
+      </div>
+      <div class="perf-section">
+        <h4>Recent server requests</h4>
+        <div id="recent-requests" class="empty">—</div>
+      </div>
+    </div>
+  </div>
+
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
+    const PERF_API_URL = 'https://isdvxh6dfxkc4y4u7na5jjvqgq0wbxso.lambda-url.us-west-2.on.aws/';
+
     const map = L.map('map', { maxZoom: 21 }).setView([-36.87, 174.77], 13);
 
     const LayerInfoControl = L.Control.extend({
@@ -125,7 +246,6 @@
 
     function fetchFootprints() {
       if (map.getZoom() >= 18 || !ogcApiBase) return;
-
       const b = map.getBounds();
       const bbox = b.getWest().toFixed(6) + ',' + b.getSouth().toFixed(6) + ',' +
                    b.getEast().toFixed(6) + ',' + b.getNorth().toFixed(6);
@@ -162,11 +282,13 @@
 
     map.on('moveend', onMoveEnd);
 
-    // WMS imagery layer — shown at zoom >= 18
+    // WMS imagery layer — shown at zoom >= 18, with client-side tile timing.
     let imageryLayer = null;
+    const tileTimers = new WeakMap();        // tile -> startMs
+    const clientSamples = [];                // rolling window of ms
 
     function buildWmsLayer(url) {
-      return L.tileLayer.wms(url, {
+      const layer = L.tileLayer.wms(url, {
         layers: 'auckland-2024',
         format: 'image/png',
         transparent: false,
@@ -175,6 +297,16 @@
         maxZoom: 21,
         attribution: 'Land Information New Zealand'
       });
+      layer.on('tileloadstart', (e) => tileTimers.set(e.tile, performance.now()));
+      layer.on('tileload', (e) => {
+        const start = tileTimers.get(e.tile);
+        if (start === undefined) return;
+        const ms = performance.now() - start;
+        clientSamples.push(ms);
+        if (clientSamples.length > 100) clientSamples.shift();
+        renderClientStats();
+      });
+      return layer;
     }
 
     function applyUrl() {
@@ -188,10 +320,110 @@
     }
 
     document.getElementById('apply-btn').addEventListener('click', applyUrl);
-    document.getElementById('wms-url').addEventListener('keydown', function(e) {
+    document.getElementById('wms-url').addEventListener('keydown', (e) => {
       if (e.key === 'Enter') applyUrl();
     });
 
+    // ---------------- performance panel ----------------
+    const panel = document.getElementById('perf-panel');
+    const perfBody = {
+      server: document.getElementById('server-stats'),
+      client: document.getElementById('client-stats'),
+      recent: document.getElementById('recent-requests'),
+    };
+
+    document.getElementById('perf-toggle').addEventListener('click', () => {
+      panel.classList.toggle('open');
+      if (panel.classList.contains('open')) refreshServerStats();
+    });
+    document.getElementById('perf-close').addEventListener('click', () => {
+      panel.classList.remove('open');
+    });
+    document.getElementById('perf-refresh').addEventListener('click', refreshServerStats);
+
+    function pct(sortedArr, p) {
+      if (sortedArr.length === 0) return null;
+      const i = Math.min(sortedArr.length - 1, Math.floor(sortedArr.length * p));
+      return sortedArr[i];
+    }
+
+    function fmtMs(s) {
+      if (s == null) return '—';
+      if (s < 1) return (s * 1000).toFixed(0) + ' ms';
+      return s.toFixed(2) + ' s';
+    }
+
+    function statsBlock(samples, opts = {}) {
+      // samples are in seconds for server, ms for client (opts.ms)
+      const sec = opts.ms ? samples.map(x => x / 1000) : samples;
+      if (sec.length === 0) return '<div class="empty">no samples yet</div>';
+      const sorted = [...sec].sort((a,b) => a - b);
+      const sum = sorted.reduce((a,b) => a + b, 0);
+      const mean = sum / sorted.length;
+      const median = pct(sorted, 0.5);
+      const p95 = pct(sorted, 0.95);
+      const p99 = pct(sorted, 0.99);
+      return '<div class="perf-stats">' +
+        '<div class="label">samples</div><div class="value">' + sorted.length + '</div>' +
+        '<div class="label">min</div><div class="value">' + fmtMs(sorted[0]) + '</div>' +
+        '<div class="label">mean</div><div class="value">' + fmtMs(mean) + '</div>' +
+        '<div class="label">median</div><div class="value">' + fmtMs(median) + '</div>' +
+        '<div class="label">p95</div><div class="value">' + fmtMs(p95) + '</div>' +
+        '<div class="label">p99</div><div class="value">' + fmtMs(p99) + '</div>' +
+        '<div class="label">max</div><div class="value">' + fmtMs(sorted[sorted.length-1]) + '</div>' +
+        '</div>';
+    }
+
+    function renderClientStats() {
+      perfBody.client.innerHTML =
+        statsBlock(clientSamples, { ms: true }) +
+        '<div class="perf-meta">rolling window of last 100 tiles loaded by Leaflet</div>';
+    }
+
+    function renderRecent(requests) {
+      if (!requests.length) {
+        perfBody.recent.innerHTML = '<div class="empty">no GetMap in window</div>';
+        return;
+      }
+      const rows = requests.slice(0, 20).map(r => {
+        const t = r.upstream_time_s;
+        const cls = t > 2 ? 'slow' : (t < 0.5 ? 'ok' : '');
+        const stamp = r.timestamp ? r.timestamp.replace('T',' ').slice(11, 19) : '';
+        const kb = r.size ? (r.size / 1024).toFixed(0) : '0';
+        return '<tr>' +
+          '<td>' + stamp + '</td>' +
+          '<td class="num ' + cls + '">' + t.toFixed(3) + 's</td>' +
+          '<td class="num">' + kb + ' KB</td>' +
+          '</tr>';
+      }).join('');
+      perfBody.recent.innerHTML =
+        '<table class="req-table">' +
+          '<thead><tr><th>time</th><th class="num">srv ms</th><th class="num">size</th></tr></thead>' +
+          '<tbody>' + rows + '</tbody>' +
+        '</table>' +
+        '<div class="perf-meta">latest 20 of ' + requests.length + ' GetMap in last hour</div>';
+    }
+
+    async function refreshServerStats() {
+      perfBody.server.innerHTML = '<div class="empty">querying CloudWatch…</div>';
+      try {
+        const t0 = performance.now();
+        const res = await fetch(PERF_API_URL);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        const queryMs = (performance.now() - t0).toFixed(0);
+        const samples = data.requests.map(r => r.upstream_time_s);
+        perfBody.server.innerHTML =
+          statsBlock(samples) +
+          '<div class="perf-meta">' + data.count + ' GetMap requests · ' +
+          'window ' + data.window_hours + 'h · query ' + queryMs + 'ms</div>';
+        renderRecent(data.requests);
+      } catch (err) {
+        perfBody.server.innerHTML = '<div class="empty">error: ' + err.message + '</div>';
+      }
+    }
+
+    renderClientStats();
     applyUrl();
   </script>
 </body>
