@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>NZ Imagery Viewer</title>
+  <title>Kentucky Imagery Viewer</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
@@ -70,6 +70,39 @@
       height: 12px;
       border-radius: 2px;
       flex-shrink: 0;
+    }
+
+    .cog-label {
+      background: rgba(255, 255, 255, 0.8);
+      border: 1px solid rgba(224, 96, 32, 0.7);
+      color: #7a2f10;
+      font-size: 10px;
+      font-weight: 600;
+      padding: 1px 3px;
+      pointer-events: none;
+      white-space: nowrap;
+    }
+
+    .cog-labels-hidden .cog-label {
+      display: none;
+    }
+
+    .tile-time-cell {
+      align-items: center;
+      border: 1px solid rgba(0, 0, 0, 0.2);
+      box-sizing: border-box;
+      display: flex;
+      justify-content: center;
+      pointer-events: none;
+    }
+
+    .tile-time-label {
+      background: rgba(0, 0, 0, 0.72);
+      border-radius: 3px;
+      color: white;
+      font: 600 12px/1.2 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      padding: 3px 5px;
+      text-shadow: 0 1px 1px rgba(0, 0, 0, 0.6);
     }
 
     /* Performance panel */
@@ -169,7 +202,7 @@
 <body>
   <div id="toolbar">
     <label>WMS URL:</label>
-    <input id="wms-url" type="text" value="http://mapserver-2105006144.us-west-2.elb.amazonaws.com/mapserv" />
+    <input id="wms-url" type="text" value="http://localhost:8081/mapserv" />
     <button id="apply-btn">Apply</button>
     <button id="perf-toggle">Perf</button>
   </div>
@@ -201,9 +234,13 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
-    const PERF_API_URL = 'https://isdvxh6dfxkc4y4u7na5jjvqgq0wbxso.lambda-url.us-west-2.on.aws/';
+    const PERF_API_URL = '';
 
-    const map = L.map('map', { maxZoom: 21 }).setView([-36.87, 174.77], 13);
+    const LOCAL_PREVIEW_BOUNDS = [[37.81, -85.51], [38.08, -85.25]];
+    const IMAGERY_MIN_ZOOM = 18;
+    const COG_LABEL_MIN_ZOOM = 15;
+    const DEFAULT_VIEW = { center: [37.937085, -85.372578], zoom: IMAGERY_MIN_ZOOM - 1 };
+    const map = L.map('map', { maxZoom: 22 }).setView(DEFAULT_VIEW.center, DEFAULT_VIEW.zoom);
 
     const LayerInfoControl = L.Control.extend({
       options: { position: 'topright' },
@@ -215,15 +252,16 @@
       },
       update: function(count) {
         const zoom = map.getZoom();
-        if (zoom < 18) {
-          const countStr = count !== undefined ? ' (' + count + ')' : '';
+        const countStr = count !== undefined ? ' (' + count + ')' : '';
+        if (zoom < IMAGERY_MIN_ZOOM) {
           this._div.innerHTML =
             '<div class="layer-row"><span class="swatch" style="background:#e06020;opacity:0.6;border:1px solid #e06020"></span>COG Footprints' + countStr + '</div>' +
             '<div class="layer-row" style="color:#aaa;padding-left:18px">zoom in for imagery</div>' +
             '<div class="layer-row" style="color:#888;padding-left:18px;font-size:11px">zoom: ' + zoom + '</div>';
         } else {
           this._div.innerHTML =
-            '<div class="layer-row"><span class="swatch" style="background:#4a9eff"></span>WMS: auckland-2024</div>' +
+            '<div class="layer-row"><span class="swatch" style="background:#e06020;opacity:0.6;border:1px solid #e06020"></span>COG Footprints' + countStr + '</div>' +
+            '<div class="layer-row"><span class="swatch" style="background:#4a9eff"></span>WMS: ky-2024</div>' +
             '<div class="layer-row" style="color:#888;padding-left:18px;font-size:11px">zoom: ' + zoom + '</div>';
         }
       }
@@ -235,7 +273,7 @@
     const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
       maxNativeZoom: 19,
-      maxZoom: 21,
+      maxZoom: 22,
       opacity: 0.4
     });
     osm.addTo(map);
@@ -244,8 +282,15 @@
     let ogcApiBase = null;
     const canvasRenderer = L.canvas();
 
+    const localPreviewFootprint = L.rectangle(LOCAL_PREVIEW_BOUNDS, {
+      color: '#e06020',
+      weight: 1,
+      fillOpacity: 0.04,
+      interactive: false
+    }).addTo(map);
+
     function fetchFootprints() {
-      if (map.getZoom() >= 18 || !ogcApiBase) return;
+      if (!ogcApiBase) return;
       const b = map.getBounds();
       const bbox = b.getWest().toFixed(6) + ',' + b.getSouth().toFixed(6) + ',' +
                    b.getEast().toFixed(6) + ',' + b.getNorth().toFixed(6);
@@ -254,14 +299,14 @@
       fetch(url)
         .then(r => r.json())
         .then(data => {
-          if (map.getZoom() >= 18) return;
           if (footprintsLayer) {
             footprintsLayer.clearLayers();
             footprintsLayer.addData(data);
           } else {
             footprintsLayer = L.geoJSON(data, {
               renderer: canvasRenderer,
-              style: { color: '#e06020', weight: 1, fillOpacity: 0.05, fillColor: '#e06020' }
+              style: { color: '#e06020', weight: 1, fillOpacity: 0.05, fillColor: '#e06020' },
+              onEachFeature: bindCogLabel
             });
             footprintsLayer.addTo(map);
           }
@@ -270,41 +315,113 @@
         .catch(err => console.warn('OGC API footprints error:', err));
     }
 
+    function bindCogLabel(feature, layer) {
+      const props = feature.properties || {};
+      const label = props.file_name || (props.key ? props.key.split('/').pop() : props.location);
+      if (!label) return;
+      layer.bindTooltip(label, {
+        permanent: true,
+        direction: 'center',
+        className: 'cog-label'
+      });
+    }
+
+    function updateCogLabelVisibility() {
+      map.getContainer().classList.toggle('cog-labels-hidden', map.getZoom() < COG_LABEL_MIN_ZOOM);
+    }
+
     function onMoveEnd() {
       layerInfo.update();
-      const zoom = map.getZoom();
-      if (zoom >= 18) {
-        if (footprintsLayer) { map.removeLayer(footprintsLayer); footprintsLayer = null; }
-      } else {
-        fetchFootprints();
-      }
+      updateCogLabelVisibility();
+      if (!map.hasLayer(localPreviewFootprint)) localPreviewFootprint.addTo(map);
+      fetchFootprints();
     }
 
     map.on('moveend', onMoveEnd);
+    updateCogLabelVisibility();
 
-    // WMS imagery layer — shown at zoom >= 18, with client-side tile timing.
+    // WMS imagery layer — shown at the imagery threshold, with client-side tile timing.
     let imageryLayer = null;
+    let tileTimeLayer = null;
+    const tileTimeCells = new Map();           // z/x/y -> label element
+    const tileTimeValues = new Map();          // z/x/y -> label text
     const tileTimers = new WeakMap();        // tile -> startMs
     const clientSamples = [];                // rolling window of ms
 
+    function tileKey(coords) {
+      return coords.z + '/' + coords.x + '/' + coords.y;
+    }
+
+    function formatTileTime(ms) {
+      return ms >= 1000 ? (ms / 1000).toFixed(2) + ' s' : Math.round(ms) + ' ms';
+    }
+
+    const TileTimeLayer = L.GridLayer.extend({
+      createTile: function(coords) {
+        const tile = document.createElement('div');
+        tile.className = 'tile-time-cell';
+        const label = document.createElement('div');
+        label.className = 'tile-time-label';
+        label.textContent = tileTimeValues.get(tileKey(coords)) || 'loading…';
+        tile.appendChild(label);
+        return tile;
+      }
+    });
+
+    function buildTileTimeLayer() {
+      return new TileTimeLayer({
+        minZoom: IMAGERY_MIN_ZOOM,
+        maxZoom: 22,
+        tileSize: 256,
+        pane: 'markerPane'
+      }).on('tileunload', (e) => {
+        tileTimeCells.delete(tileKey(e.coords));
+      }).on('tileload', (e) => {
+        const key = tileKey(e.coords);
+        const label = e.tile.querySelector('.tile-time-label');
+        tileTimeCells.set(key, label);
+        label.textContent = tileTimeValues.get(key) || 'loading…';
+      });
+    }
+
     function buildWmsLayer(url) {
       const layer = L.tileLayer.wms(url, {
-        layers: 'auckland-2024',
+        layers: 'ky-2024',
         format: 'image/png',
         transparent: false,
         version: '1.3.0',
-        minZoom: 18,
-        maxZoom: 21,
-        attribution: 'Land Information New Zealand'
+        minZoom: IMAGERY_MIN_ZOOM,
+        maxZoom: 22,
+        keepBuffer: 1,
+        updateWhenIdle: true,
+        updateWhenZooming: false,
+        attribution: 'KyFromAbove / Commonwealth of Kentucky'
       });
-      layer.on('tileloadstart', (e) => tileTimers.set(e.tile, performance.now()));
+      layer.on('tileloadstart', (e) => {
+        tileTimers.set(e.tile, performance.now());
+        const key = tileKey(e.coords);
+        tileTimeValues.set(key, 'loading…');
+        const label = tileTimeCells.get(key);
+        if (label) label.textContent = 'loading…';
+      });
       layer.on('tileload', (e) => {
         const start = tileTimers.get(e.tile);
         if (start === undefined) return;
         const ms = performance.now() - start;
+        const text = formatTileTime(ms);
+        const key = tileKey(e.coords);
+        tileTimeValues.set(key, text);
+        const label = tileTimeCells.get(key);
+        if (label) label.textContent = text;
         clientSamples.push(ms);
         if (clientSamples.length > 100) clientSamples.shift();
         renderClientStats();
+      });
+      layer.on('tileerror', (e) => {
+        const key = tileKey(e.coords);
+        tileTimeValues.set(key, 'error');
+        const label = tileTimeCells.get(key);
+        if (label) label.textContent = 'error';
       });
       return layer;
     }
@@ -312,10 +429,15 @@
     function applyUrl() {
       const url = document.getElementById('wms-url').value.trim();
       if (!url) return;
-      ogcApiBase = new URL(url).origin + '/mapserv/nz-imagery/ogcapi';
+      ogcApiBase = new URL(url).origin + '/mapserv/ky-imagery/ogcapi';
       if (imageryLayer) map.removeLayer(imageryLayer);
+      if (tileTimeLayer) map.removeLayer(tileTimeLayer);
+      tileTimeCells.clear();
+      tileTimeValues.clear();
       imageryLayer = buildWmsLayer(url);
+      tileTimeLayer = buildTileTimeLayer();
       imageryLayer.addTo(map);
+      tileTimeLayer.addTo(map);
       fetchFootprints();
     }
 
@@ -405,6 +527,10 @@
     }
 
     async function refreshServerStats() {
+      if (!PERF_API_URL) {
+        perfBody.server.innerHTML = '<div class="empty">perf API disabled in local preview</div>';
+        return;
+      }
       perfBody.server.innerHTML = '<div class="empty">querying CloudWatch…</div>';
       try {
         const t0 = performance.now();

@@ -20,10 +20,11 @@ cdk/
 cdk.out/
 *.gpkg
 *.geojson
+!mapfiles/ky_20x20_tileindex.geojson
+!mapfiles/ky_20x20_tileindex_3089.geojson
 
 # Tooling
 scripts/
-viewer/
 iam/
 
 # Python

@@ -1,13 +1,11 @@
 """
-One-shot loader: read tile_extents.geojson from S3, INSERT into cog_index.
+One-shot loader for cog_index. Reads the bundled KyFromAbove tile grid
+(EPSG:3857 polygons, one per COG) and INSERTs (location, geom).
 
-Invoke manually after stack deploy:
+Invoke after stack is up:
+    aws lambda invoke --function-name $(...) /tmp/out.json --region us-west-2
 
-    aws lambda invoke --function-name $(...) /tmp/out.json --region us-west-2 \\
-        --cli-binary-format raw-in-base64-out \\
-        --payload '{"prefix":"auckland/auckland_2024_0.075m/rgb/2193/","bucket":"nz-imagery"}'
-
-Idempotent on `location` (UNIQUE) — re-runs are safe.
+Idempotent on `location` (UNIQUE). Re-runs are safe.
 """
 import json
 import logging
@@ -20,16 +18,15 @@ import psycopg
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-DEFAULT_COG_PREFIX = "auckland/auckland_2024_0.075m/rgb/2193/"
 # Route through the in-container nginx proxy_cache layer so every FastCGI
 # worker shares one disk-backed cache instead of fragmenting per-process
 # VSI caches. nginx forwards misses to the real S3 endpoint.
 DEFAULT_COG_PROXY = "http://localhost:8001"
 BATCH = 500
 
-# tile_extents.geojson is bundled into the Lambda asset to avoid a VPC
-# round-trip to S3 (the Lambda runs in a private-subnet-style config).
-EXTENTS_PATH = Path(__file__).with_name("tile_extents.geojson")
+# Bundled tile grid: EPSG:3857 polygons, `key` is the S3 path under the
+# kyfromabove bucket (e.g. "imagery/orthos/Phase3/.../file.tif").
+EXTENTS_PATH = Path(__file__).with_name("ky_2024_grid.geojson")
 
 
 def _connect():
@@ -48,11 +45,10 @@ def _features():
 
 
 def main(event: dict[str, Any], context):
-    cog_prefix = event.get("prefix", DEFAULT_COG_PREFIX)
     cog_proxy = event.get("proxy", DEFAULT_COG_PROXY)
-    base = f"/vsicurl/{cog_proxy}/{cog_prefix}"
+    vsi_base = f"/vsicurl/{cog_proxy.rstrip('/')}"
 
-    logger.info("Loading bundled %s, vsi base %s", EXTENTS_PATH, base)
+    logger.info("Loading bundled %s, vsi base %s", EXTENTS_PATH, vsi_base)
 
     features = _features()
     logger.info("Parsed %d features", len(features))
@@ -65,15 +61,15 @@ def main(event: dict[str, Any], context):
             placeholders = []
             args: list[Any] = []
             for f in batch:
-                file_name = f.get("properties", {}).get("file")
+                key = f.get("properties", {}).get("key")
                 geom = f.get("geometry")
-                if not file_name or not geom:
+                if not key or not geom:
                     skipped += 1
                     continue
-                location = base + file_name
+                location = f"{vsi_base}/{key.lstrip('/')}"
+                file_name = key.rsplit("/", 1)[-1]
                 placeholders.append(
-                    "(%s, %s, "
-                    "ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON(%s), 4326), 2193))"
+                    "(%s, %s, ST_SetSRID(ST_GeomFromGeoJSON(%s), 3857))"
                 )
                 args.extend([location, file_name, json.dumps(geom)])
 
@@ -96,5 +92,5 @@ def main(event: dict[str, Any], context):
         "inserted": inserted,
         "skipped": skipped,
         "total_features": len(features),
-        "vsi_base": base,
+        "vsi_base": vsi_base,
     }
