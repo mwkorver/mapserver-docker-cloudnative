@@ -28,19 +28,20 @@ EXTENSIONS = [
 ]
 
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS cog_index (
+DROP TABLE IF EXISTS cog_index CASCADE;
+CREATE TABLE cog_index (
     id          SERIAL PRIMARY KEY,
     location    TEXT UNIQUE NOT NULL,
     file_name   TEXT NOT NULL,
-    geom        GEOMETRY(Polygon, 2193) NOT NULL,
+    geom        GEOMETRY(MultiPolygon, 3857) NOT NULL,
     res_m       DOUBLE PRECISION,
     width       INT,
     height      INT,
     uploaded_at TIMESTAMPTZ DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS cog_index_geom_idx ON cog_index USING GIST(geom);
-CREATE INDEX IF NOT EXISTS cog_index_file_name_trgm ON cog_index USING GIN(file_name gin_trgm_ops);
+CREATE INDEX cog_index_geom_idx ON cog_index USING GIST(geom);
+CREATE INDEX cog_index_file_name_trgm ON cog_index USING GIN(file_name gin_trgm_ops);
 
 CREATE TABLE IF NOT EXISTS tile_status (
     z           INT NOT NULL,

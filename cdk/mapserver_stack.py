@@ -189,7 +189,7 @@ class MapserverStack(Stack):
             self,
             "DbInitTrigger",
             service_token=provider.service_token,
-            properties={"version": "1"},
+            properties={"version": "3"},  # bypass proxy: /vsis3/ paths
         )
 
         # --- One-shot COG loader ------------------------------------------
@@ -364,6 +364,7 @@ class MapserverStack(Stack):
             deregistration_delay=Duration.seconds(30),
         )
         service_sg.add_ingress_rule(alb_sg, ec2.Port.tcp(80), "ALB to tasks")
+        container.add_environment("PUBLIC_HOST", alb.load_balancer_dns_name)
 
         # --- Autoscaling ---------------------------------------------------
         # Skipped when parked — registering a target with min_capacity=1

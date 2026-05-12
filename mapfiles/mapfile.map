@@ -1,8 +1,9 @@
 MAP
-  NAME "nz-imagery"
+  NAME "ky-imagery"
   STATUS ON
   SIZE 256 256
-  EXTENT 1722000 5900000 1812000 5970000
+  # Kentucky extent in EPSG:3857 (Web Mercator)
+  EXTENT -9968000 4368000 -9124000 4744000
   UNITS METERS
 
   OUTPUTFORMAT
@@ -25,15 +26,15 @@ MAP
   IMAGECOLOR 255 255 255
 
   PROJECTION
-    "init=epsg:2193"
+    "init=epsg:3857"
   END
 
   WEB
     METADATA
-      "ows_title"           "Auckland 2024 Imagery"
-      "ows_abstract"        "Auckland 2024 0.075m aerial imagery mosaic"
+      "ows_title"           "KyFromAbove 2024 Imagery"
+      "ows_abstract"        "Kentucky aerial orthoimagery, 2024 Season 1 (3-inch resolution)"
       "ows_onlineresource"  "http://${PUBLIC_HOST}/mapserv"
-      "ows_srs"             "EPSG:2193 EPSG:4326 EPSG:3857"
+      "ows_srs"             "EPSG:3857 EPSG:4326 EPSG:3089"
       "ows_enable_request"  "*"
       "F_enable_request"    "*"
       "wms_allow_getmap_without_styles" "true"
@@ -41,6 +42,8 @@ MAP
   END
 
   CONFIG "MS_ERRORFILE" "stderr"
+  CONFIG "MS_DEBUGLEVEL" "5"
+  CONFIG "CPL_DEBUG" "ON"
   CONFIG "AWS_NO_SIGN_REQUEST" "YES"
   CONFIG "VSI_CACHE" "TRUE"
   CONFIG "VSI_CACHE_SIZE" "134217728"
@@ -48,31 +51,33 @@ MAP
   CONFIG "GDAL_HTTP_MULTIPLEX" "YES"
   CONFIG "GDAL_HTTP_VERSION" "2"
   CONFIG "GDAL_HTTP_MERGE_CONSECUTIVE_RANGES" "YES"
-  CONFIG "CPL_VSIL_CURL_ALLOWED_EXTENSIONS" ".tiff,.tif"
+  CONFIG "CPL_VSIL_CURL_ALLOWED_EXTENSIONS" ".tif,.tiff"
 
-  # Vector layer over the same cog_index table — exposes COG footprints via
-  # OGC API Features and WFS.
+  # cog-extents serves two roles:
+  #   1. POSTGIS-backed POLYGON layer for OGC API Features and WFS
+  #   2. Named tileindex source for the raster layer below
+  # Stored geometry is EPSG:3857 to match incoming web-tile requests —
+  # no reprojection in the spatial-query hot path.
   LAYER
     NAME "cog-extents"
     TYPE POLYGON
     STATUS ON
     TEMPLATE "unused"
-    EXTENT 174.5 -37.1 175.2 -36.5
+    EXTENT -9968000 4368000 -9124000 4744000
     CONNECTIONTYPE POSTGIS
     CONNECTION "host=${DB_HOST} port=${DB_PORT} dbname=${DB_NAME} user=${DB_USER} password=${DB_PASS}"
-    DATA "geom FROM cog_index USING UNIQUE id USING SRID=2193"
+    DATA "geom FROM cog_index USING UNIQUE id USING SRID=3857"
     PROJECTION
-      "init=epsg:2193"
+      "init=epsg:3857"
     END
     METADATA
       "ows_title"          "COG Tile Extents"
-      "ows_abstract"       "COG tile footprints"
-      "ows_extent"         "174.5 -37.1 175.2 -36.5"
-      "ows_srs"            "EPSG:2193 EPSG:4326 EPSG:3857"
+      "ows_abstract"       "KyFromAbove 2024 Season 1 COG footprints"
+      "ows_srs"            "EPSG:3857 EPSG:4326"
       "gml_include_items"  "all"
       "gml_featureid"      "id"
       "gml_geometries"     "msGeometry"
-      "gml_msGeometry_type" "polygon"
+      "gml_msGeometry_type" "multipolygon"
       "ows_enable_request" "*"
       "wfs_enable_request" "*"
       "F_enable_request"   "*"
@@ -80,11 +85,13 @@ MAP
     END
   END
 
-  # Raster layer driven by a PostGIS tileindex — MapServer issues a spatial
-  # query against cog_index for each request and reads only the intersecting
-  # COGs from S3. No VRT, no shapefile tileindex.
+  # Raster layer: TILEINDEX references cog-extents by name. MapServer
+  # spatial-queries cog_index for COGs intersecting the request bbox,
+  # then reads each via /vsicurl/http://localhost:8001/... through the
+  # in-container nginx proxy_cache layer (shared by all FastCGI workers).
+  # COG native CRS is EPSG:3089 (Kentucky State Plane, US ft).
   LAYER
-    NAME "auckland-2024"
+    NAME "ky-2024"
     TYPE RASTER
     STATUS ON
     TILEINDEX "cog-extents"
@@ -92,11 +99,11 @@ MAP
     PROCESSING "BANDS=1,2,3"
     PROCESSING "RESAMPLE=AVERAGE"
     PROJECTION
-      "init=epsg:2193"
+      "init=epsg:3089"
     END
     METADATA
-      "ows_title"    "Auckland 2024 0.075m"
-      "ows_abstract" "Auckland 2024 high-resolution aerial imagery"
+      "ows_title"    "KyFromAbove 2024 Season 1 (3 in)"
+      "ows_abstract" "Kentucky high-resolution aerial imagery"
     END
   END
 
