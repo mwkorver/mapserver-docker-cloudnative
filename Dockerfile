@@ -87,9 +87,11 @@ RUN apt-get update && apt-get upgrade -y && \
 ADD etc /etc
 RUN ln -sf /etc/nginx/sites-available/mapserver_proxy.conf /etc/nginx/sites-enabled/default && \
     chmod +x /etc/entrypoint.sh && \
+    chmod +x /etc/s3_sigv4_proxy.py && \
     mkdir -p /var/cache/nginx/cog && \
     chown -R www-data:www-data /var/cache/nginx
 COPY mapfiles /usr/src/mapfiles
+COPY viewer /usr/src/viewer
 
 EXPOSE 80
 
