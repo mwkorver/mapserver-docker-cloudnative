@@ -51,6 +51,7 @@ class MapserverStack(Stack):
         # Default is unparked (running). Re-deploy without the flag to wake.
         parked_ctx = self.node.try_get_context("parked")
         parked = str(parked_ctx).lower() in ("true", "1", "yes")
+        mapserver_numprocs = str(self.node.try_get_context("mapserver_numprocs") or "6")
 
         # --- Networking ----------------------------------------------------
         vpc = ec2.Vpc(
@@ -76,6 +77,9 @@ class MapserverStack(Stack):
         # --- Storage and registry -----------------------------------------
         config_bucket = s3.Bucket.from_bucket_name(
             self, "ConfigBucket", config_bucket_name
+        )
+        imagery_bucket = s3.Bucket.from_bucket_name(
+            self, "ImageryBucket", "kyfromabove"
         )
 
         ecr_repo = ecr.Repository.from_repository_name(
@@ -189,7 +193,7 @@ class MapserverStack(Stack):
             self,
             "DbInitTrigger",
             service_token=provider.service_token,
-            properties={"version": "3"},  # bypass proxy: /vsis3/ paths
+            properties={"version": "4"},  # add native EPSG:3089 raster tileindex
         )
 
         # --- One-shot COG loader ------------------------------------------
@@ -279,16 +283,20 @@ class MapserverStack(Stack):
             self,
             "TaskDef",
             family="mapserver",
-            cpu=1024,
-            memory_limit_mib=4096,
+            cpu=4096,
+            memory_limit_mib=8192,
             runtime_platform=ecs.RuntimePlatform(
                 cpu_architecture=ecs.CpuArchitecture.ARM64,
                 operating_system_family=ecs.OperatingSystemFamily.LINUX,
             ),
         )
 
-        # Task role: read-only S3 for the mapfile, plus read the DB secret
+        # Task role: read-only S3 for config and imagery, plus read the DB secret.
+        # GDAL still reads /vsicurl/http://localhost:8001/...; nginx handles
+        # range-aware cache lookup, then the local signer uses this task role
+        # only on cache misses against private S3.
         config_bucket.grant_read(task_def.task_role)
+        imagery_bucket.grant_read(task_def.task_role, "imagery/*")
         db.secret.grant_read(task_def.task_role)
 
         container = task_def.add_container(
@@ -301,6 +309,13 @@ class MapserverStack(Stack):
                 "MAPFILE_S3_URI": f"s3://{config_bucket_name}/mapfile.map",
                 "DB_SECRET_ARN": db.secret.secret_arn,
                 "AWS_REGION": self.region,
+                "S3_BUCKET": "kyfromabove",
+                "S3_REGION": self.region,
+                "S3_SIGNING": "required",
+                "MAPSERVER_NUMPROCS": mapserver_numprocs,
+                "ADMIN_WRITE_ENABLED": "false",
+                "FARGATE_CPU": "4096",
+                "FARGATE_MEMORY": "8192",
             },
         )
         container.add_port_mappings(ecs.PortMapping(container_port=80))

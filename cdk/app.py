@@ -9,13 +9,14 @@ app = cdk.App()
 config_bucket = app.node.try_get_context("config_bucket") or "mapserver-docker-cloudnative"
 ecr_repo_name = app.node.try_get_context("ecr_repo") or "mapserver-docker-cloudnative"
 image_tag = app.node.try_get_context("image_tag") or "latest"
+region = app.node.try_get_context("region") or os.environ.get("CDK_DEFAULT_REGION", "us-west-2")
 
 MapserverStack(
     app,
     "MapserverStack",
     env=cdk.Environment(
         account=os.environ.get("CDK_DEFAULT_ACCOUNT"),
-        region=os.environ.get("CDK_DEFAULT_REGION", "us-west-2"),
+        region=region,
     ),
     config_bucket_name=config_bucket,
     ecr_repo_name=ecr_repo_name,
