@@ -2,6 +2,17 @@
 set -e
 
 write_local_preview_mapfile() {
+    case "${LOCAL_COLLECTION:-ky-2024-3in}" in
+        nj-2020-1ft)
+            write_nj_preview_mapfile
+            ;;
+        *)
+            write_ky_preview_mapfile
+            ;;
+    esac
+}
+
+write_ky_preview_mapfile() {
     cat >/usr/src/mapfiles/mapfile.map <<'EOF'
 MAP
   NAME "ky-imagery"
@@ -41,8 +52,9 @@ MAP
   CONFIG "MS_DEBUGLEVEL" "5"
   CONFIG "CPL_DEBUG" "ON"
   CONFIG "AWS_NO_SIGN_REQUEST" "YES"
+  CONFIG "GDAL_CACHEMAX" "128"
   CONFIG "VSI_CACHE" "TRUE"
-  CONFIG "VSI_CACHE_SIZE" "134217728"
+  CONFIG "VSI_CACHE_SIZE" "33554432"
   CONFIG "GDAL_DISABLE_READDIR_ON_OPEN" "TRUE"
   CONFIG "GDAL_HTTP_MULTIPLEX" "YES"
   CONFIG "GDAL_HTTP_VERSION" "2"
@@ -109,6 +121,116 @@ END
 EOF
 }
 
+write_nj_preview_mapfile() {
+    cat >/usr/src/mapfiles/mapfile.map <<'EOF'
+MAP
+  NAME "nj-imagery"
+  STATUS ON
+  SIZE 256 256
+  EXTENT -8412731 4709462 -8223562 5067461
+  UNITS METERS
+
+  OUTPUTFORMAT
+    NAME png24
+    DRIVER "AGG/PNG"
+    MIMETYPE "image/png"
+    IMAGEMODE RGB
+    EXTENSION "png"
+  END
+
+  IMAGETYPE png24
+  IMAGECOLOR 255 255 255
+
+  PROJECTION
+    "init=epsg:3857"
+  END
+
+  WEB
+    METADATA
+      "ows_title"           "NJ 2020 Imagery"
+      "ows_abstract"        "Local preview mode for NJ 2020 1-foot COGs"
+      "ows_onlineresource"  "http://${PUBLIC_HOST}/mapserv"
+      "ows_srs"             "EPSG:3857 EPSG:4326 EPSG:6527"
+      "ows_enable_request"  "*"
+      "F_enable_request"    "*"
+      "wms_allow_getmap_without_styles" "true"
+    END
+  END
+
+  CONFIG "MS_ERRORFILE" "stderr"
+  CONFIG "MS_DEBUGLEVEL" "5"
+  CONFIG "CPL_DEBUG" "ON"
+  CONFIG "AWS_NO_SIGN_REQUEST" "YES"
+  CONFIG "GDAL_CACHEMAX" "128"
+  CONFIG "VSI_CACHE" "TRUE"
+  CONFIG "VSI_CACHE_SIZE" "33554432"
+  CONFIG "GDAL_DISABLE_READDIR_ON_OPEN" "TRUE"
+  CONFIG "GDAL_HTTP_MULTIPLEX" "YES"
+  CONFIG "GDAL_HTTP_VERSION" "2"
+  CONFIG "GDAL_HTTP_MERGE_CONSECUTIVE_RANGES" "YES"
+  CONFIG "CPL_VSIL_CURL_ALLOWED_EXTENSIONS" ".tif,.tiff"
+
+  LAYER
+    NAME "cog-extents"
+    TYPE POLYGON
+    STATUS ON
+    TEMPLATE "unused"
+    EXTENT -8412731 4709462 -8223562 5067461
+    CONNECTIONTYPE OGR
+    CONNECTION "/usr/src/mapfiles/nj_2020_footprints_3857.geojson"
+    DATA "nj-2020-1ft_footprints_3857"
+    PROJECTION
+      "init=epsg:3857"
+    END
+    METADATA
+      "ows_title"          "NJ 2020 COG Tile Index"
+      "ows_abstract"       "NJ 2020 COG footprints"
+      "ows_srs"            "EPSG:3857 EPSG:4326"
+      "gml_include_items"  "all"
+      "gml_featureid"      "file_name"
+      "gml_geometries"     "msGeometry"
+      "gml_msGeometry_type" "multipolygon"
+      "ows_enable_request" "*"
+      "wfs_enable_request" "*"
+      "F_enable_request"   "*"
+      "ows_maxfeatures"    "10000"
+    END
+  END
+
+  LAYER
+    NAME "nj-2020"
+    TYPE RASTER
+    STATUS ON
+    TILEINDEX "cog-tileindex"
+    TILEITEM "location"
+    PROCESSING "BANDS=1,2,3"
+    PROCESSING "SCALE=AUTO"
+    PROCESSING "RESAMPLE=AVERAGE"
+    PROJECTION
+      "init=epsg:6527"
+    END
+    METADATA
+      "ows_title"    "NJ 2020 1-foot imagery"
+      "ows_abstract" "NJ 2020 COG tile index preview through nginx cache"
+    END
+  END
+
+  LAYER
+    NAME "cog-tileindex"
+    TYPE POLYGON
+    STATUS OFF
+    EXTENT 190000 30000 665000 925000
+    CONNECTIONTYPE OGR
+    CONNECTION "/usr/src/mapfiles/nj_2020_tileindex_6527.geojson"
+    DATA "nj-2020-1ft_tileindex_6527"
+    PROJECTION
+      "init=epsg:6527"
+    END
+  END
+END
+EOF
+}
+
 # Optional: download a fresh mapfile template from S3, overwriting the bundled one.
 if [ -n "$MAPFILE_S3_URI" ]; then
     echo "Downloading mapfile from ${MAPFILE_S3_URI}..."
@@ -137,6 +259,35 @@ fi
 
 # PUBLIC_HOST is what ows_onlineresource advertises; fall back to localhost.
 export PUBLIC_HOST="${PUBLIC_HOST:-localhost}"
+export MAPSERVER_NUMPROCS="${MAPSERVER_NUMPROCS:-6}"
+if ! [[ "$MAPSERVER_NUMPROCS" =~ ^[1-9][0-9]*$ ]]; then
+    echo "ERROR: MAPSERVER_NUMPROCS must be a positive integer; got '${MAPSERVER_NUMPROCS}'." >&2
+    exit 1
+fi
+
+sed -i "s/^numprocs=.*/numprocs=${MAPSERVER_NUMPROCS}/" /etc/supervisor/conf.d/supervisord.conf
+
+if [ -z "$ADMIN_WRITE_ENABLED" ]; then
+    if [ -z "$DB_SECRET_ARN" ] && [ -z "$DB_HOST" ]; then
+        export ADMIN_WRITE_ENABLED="true"
+    else
+        export ADMIN_WRITE_ENABLED="false"
+    fi
+fi
+case "${ADMIN_WRITE_ENABLED,,}" in
+    1|true|yes) ADMIN_WRITE_ENABLED_JSON=true ;;
+    *) ADMIN_WRITE_ENABLED_JSON=false ;;
+esac
+
+cat >/usr/src/admin/config.json <<EOF
+{
+  "mapserverNumprocs": ${MAPSERVER_NUMPROCS},
+  "writeEnabled": ${ADMIN_WRITE_ENABLED_JSON},
+  "fargateCpu": "${FARGATE_CPU:-4096}",
+  "fargateMemory": "${FARGATE_MEMORY:-8192}",
+  "s3Signing": "${S3_SIGNING:-auto}"
+}
+EOF
 
 if [ -z "$DB_SECRET_ARN" ] && [ -z "$DB_HOST" ]; then
     echo "No database configuration found; enabling local preview mapfile."
