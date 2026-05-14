@@ -227,6 +227,93 @@
       margin-bottom: 16px;
     }
 
+    .scan-field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 8px 0;
+      flex: 1;
+      min-width: 0;
+    }
+    .scan-field label { color: var(--muted); font-size: 13px; }
+    .scan-field small { color: var(--muted); font-size: 12px; }
+    .scan-field input[type="text"],
+    .scan-field input[type="number"],
+    .scan-field select {
+      width: 100%;
+      box-sizing: border-box;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 7px 8px;
+      font: inherit;
+    }
+    .scan-field-row {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+    }
+    .scan-job {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-top: 10px;
+      font-size: 13px;
+    }
+    .scan-job-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+    .scan-job-id {
+      color: var(--muted);
+      font-size: 11px;
+      font-family: ui-monospace, monospace;
+    }
+    .scan-job-status {
+      font-weight: 650;
+      text-transform: uppercase;
+      font-size: 11px;
+      letter-spacing: 0.04em;
+    }
+    .scan-job-status.running   { color: var(--accent); }
+    .scan-job-status.complete  { color: var(--good); }
+    .scan-job-status.failed    { color: var(--bad); }
+    .scan-progress-bar {
+      height: 6px;
+      background: #e5e7eb;
+      border-radius: 4px;
+      overflow: hidden;
+      margin: 6px 0;
+    }
+    .scan-progress-fill {
+      height: 100%;
+      background: var(--accent);
+      transition: width 200ms ease;
+    }
+    .scan-job-meta {
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .scan-job-log {
+      margin-top: 8px;
+      max-height: 120px;
+      overflow-y: auto;
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 8px;
+      font-family: ui-monospace, monospace;
+      font-size: 11px;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .scan-job-error {
+      color: var(--bad);
+      margin-top: 6px;
+    }
+
     .timestamp {
       color: var(--muted);
       font-size: 13px;
@@ -338,6 +425,88 @@
               </tbody>
             </table>
           </div>
+        </div>
+      </div>
+
+      <div class="grid" style="margin-top: 16px">
+        <div class="panel">
+          <h2>Add a collection</h2>
+          <div id="scan-form-disabled-msg" class="metric" style="color: var(--bad); display: none">
+            <span>Status</span>
+            <span>admin writes disabled — set ADMIN_WRITE_ENABLED=true to enable</span>
+          </div>
+          <form id="scan-form">
+            <div class="scan-field">
+              <label for="scan-collection-id">Collection ID</label>
+              <input type="text" id="scan-collection-id" placeholder="naip-ca-2022-rgb"
+                     pattern="^[a-z0-9]+(-[a-z0-9]+)*$" required />
+              <small>lowercase kebab-case, e.g. <code>naip-ca-2022-rgb</code></small>
+            </div>
+            <div class="scan-field">
+              <label for="scan-bucket">S3 bucket</label>
+              <input type="text" id="scan-bucket" placeholder="naip-visualization" required />
+            </div>
+            <div class="scan-field">
+              <label for="scan-prefix">Prefix</label>
+              <input type="text" id="scan-prefix" placeholder="ca/2022/60cm/rgb_cog/" required />
+              <small>prefix under the bucket containing the COGs</small>
+            </div>
+            <div class="scan-field-row">
+              <div class="scan-field">
+                <label for="scan-region">Region</label>
+                <input type="text" id="scan-region" value="us-west-2" required />
+              </div>
+              <div class="scan-field">
+                <label for="scan-access-mode">Access</label>
+                <select id="scan-access-mode">
+                  <option value="unsigned">unsigned (public)</option>
+                  <option value="signed">signed (private)</option>
+                  <option value="requester-pays">requester-pays</option>
+                </select>
+              </div>
+              <div class="scan-field">
+                <label for="scan-limit">COG limit</label>
+                <input type="number" id="scan-limit" min="1" placeholder="e.g. 50"
+                       title="Cap scan at N COGs; leave blank to scan all" />
+              </div>
+            </div>
+            <div class="scan-field">
+              <label for="scan-label">Label (optional)</label>
+              <input type="text" id="scan-label" placeholder="NAIP California 2022 RGB" />
+            </div>
+            <div class="scan-field">
+              <label for="scan-attribution">Attribution (optional)</label>
+              <input type="text" id="scan-attribution" placeholder="USDA NAIP / data provider" />
+            </div>
+            <div class="scan-field-row">
+              <div class="scan-field">
+                <label for="scan-min-zoom">Min zoom</label>
+                <input type="number" id="scan-min-zoom" value="14" min="0" max="24" />
+              </div>
+              <div class="scan-field">
+                <label for="scan-max-zoom">Max zoom</label>
+                <input type="number" id="scan-max-zoom" value="22" min="0" max="24" />
+              </div>
+              <div class="scan-field">
+                <label for="scan-draw-order">Draw order</label>
+                <input type="number" id="scan-draw-order" value="10" />
+              </div>
+            </div>
+            <div class="scan-field-row" style="margin-top: 12px">
+              <button type="submit" class="primary" id="scan-submit">Scan and add</button>
+              <span id="scan-form-status" class="timestamp"></span>
+            </div>
+          </form>
+        </div>
+
+        <div class="panel">
+          <h2>Active scans</h2>
+          <div class="metric">
+            <span>Polling</span>
+            <span>every 2 seconds while a scan is running</span>
+          </div>
+          <div id="scan-jobs-empty" class="timestamp">No scans submitted yet.</div>
+          <div id="scan-jobs"></div>
         </div>
       </div>
     </section>
@@ -913,6 +1082,159 @@
       }
     }
 
+    // ------------------------------------------------------------------
+    // "Add a collection" — submit a scan and stream job status from the API.
+    // ------------------------------------------------------------------
+    const scanUrl = `${window.location.origin}/admin/api/collections/scan`;
+    const jobsUrl = `${window.location.origin}/admin/api/jobs`;
+    const scanForm = document.getElementById("scan-form");
+    const scanSubmit = document.getElementById("scan-submit");
+    const scanFormStatus = document.getElementById("scan-form-status");
+    const scanJobsContainer = document.getElementById("scan-jobs");
+    const scanJobsEmpty = document.getElementById("scan-jobs-empty");
+    const trackedJobs = new Set();
+    let jobsPollTimer = null;
+
+    function setScanFormEnabled(enabled) {
+      const inputs = scanForm.querySelectorAll("input, select, button");
+      inputs.forEach((el) => { el.disabled = !enabled; });
+      const msg = document.getElementById("scan-form-disabled-msg");
+      msg.style.display = enabled ? "none" : "";
+    }
+
+    async function submitScan(event) {
+      event.preventDefault();
+      const payload = {
+        collection_id: document.getElementById("scan-collection-id").value.trim(),
+        bucket:        document.getElementById("scan-bucket").value.trim(),
+        prefix:        document.getElementById("scan-prefix").value.trim(),
+        region:        document.getElementById("scan-region").value.trim() || "us-west-2",
+        access_mode:   document.getElementById("scan-access-mode").value,
+        label:         document.getElementById("scan-label").value.trim() || undefined,
+        attribution:   document.getElementById("scan-attribution").value.trim() || undefined,
+        min_zoom:      Number.parseInt(document.getElementById("scan-min-zoom").value, 10),
+        max_zoom:      Number.parseInt(document.getElementById("scan-max-zoom").value, 10),
+        draw_order:    Number.parseInt(document.getElementById("scan-draw-order").value, 10),
+      };
+      const limit = Number.parseInt(document.getElementById("scan-limit").value, 10);
+      if (Number.isFinite(limit) && limit > 0) payload.limit = limit;
+      if (payload.access_mode === "requester-pays") payload.requester_pays = true;
+
+      scanSubmit.disabled = true;
+      scanFormStatus.textContent = "submitting…";
+      scanFormStatus.className = "timestamp";
+      try {
+        const { response } = await timedFetch(scanUrl, {
+          timeoutMs: 30000,
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const result = await response.json();
+        if (!response.ok) {
+          throw new Error(result.error || `HTTP ${response.status}`);
+        }
+        scanFormStatus.textContent = `submitted ${result.job_id.slice(0, 8)}…`;
+        scanFormStatus.className = "good";
+        trackedJobs.add(result.job_id);
+        startJobsPolling();
+        await refreshJobs();
+      } catch (error) {
+        scanFormStatus.textContent = error.message;
+        scanFormStatus.className = "bad";
+      } finally {
+        scanSubmit.disabled = !latestConfig.writeEnabled;
+      }
+    }
+
+    function startJobsPolling() {
+      if (jobsPollTimer !== null) return;
+      jobsPollTimer = setInterval(refreshJobs, 2000);
+    }
+
+    function stopJobsPolling() {
+      if (jobsPollTimer === null) return;
+      clearInterval(jobsPollTimer);
+      jobsPollTimer = null;
+    }
+
+    function renderJob(job) {
+      const id = `scan-job-${job.job_id}`;
+      const existing = document.getElementById(id);
+      const total = job.discovered ?? "—";
+      const pct = (job.discovered && job.discovered > 0)
+        ? Math.min(100, Math.round((job.scanned / job.discovered) * 100))
+        : (job.status === "complete" ? 100 : 0);
+      const fmtTime = (s) => s ? new Date(s).toLocaleTimeString() : "—";
+      const html = `
+        <div class="scan-job-header">
+          <div>
+            <strong>${job.collection_id}</strong>
+            <span class="scan-job-id">${job.job_id.slice(0, 8)}</span>
+          </div>
+          <span class="scan-job-status ${job.status}">${job.status}</span>
+        </div>
+        <div class="scan-progress-bar"><div class="scan-progress-fill" style="width: ${pct}%"></div></div>
+        <div class="scan-job-meta">
+          ${job.scanned}/${total} COGs · ${job.failures} failures · started ${fmtTime(job.started_at)}${
+          job.completed_at ? ` · finished ${fmtTime(job.completed_at)}` : ""
+        }
+        </div>
+        ${job.error_message ? `<div class="scan-job-error">Error: ${job.error_message}</div>` : ""}
+        ${job.log_tail && job.log_tail.length
+          ? `<details><summary>Log tail (${job.log_tail.length} lines)</summary><div class="scan-job-log">${job.log_tail.map(escapeHtml).join("\n")}</div></details>`
+          : ""}
+      `;
+      if (existing) {
+        existing.innerHTML = html;
+      } else {
+        const div = document.createElement("div");
+        div.className = "scan-job";
+        div.id = id;
+        div.innerHTML = html;
+        scanJobsContainer.prepend(div);
+      }
+    }
+
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    }
+
+    async function refreshJobs() {
+      try {
+        const { response } = await timedFetch(jobsUrl, { timeoutMs: 3000 });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        const jobs = data.jobs || [];
+        scanJobsEmpty.style.display = jobs.length ? "none" : "";
+
+        const seen = new Set();
+        let anyRunning = false;
+        for (const job of jobs) {
+          seen.add(job.job_id);
+          renderJob(job);
+          if (job.status === "running") anyRunning = true;
+        }
+
+        // Reload the collections table whenever a tracked job completes so the
+        // new collection appears immediately.
+        for (const jobId of Array.from(trackedJobs)) {
+          const match = jobs.find((j) => j.job_id === jobId);
+          if (match && match.status !== "running") {
+            trackedJobs.delete(jobId);
+            loadCollections();
+          }
+        }
+
+        if (!anyRunning) stopJobsPolling();
+      } catch (error) {
+        // Quiet failure — server might still be coming up. Keep polling.
+      }
+    }
+
     async function updateNumprocs() {
       const status = document.getElementById("numprocs-status");
       const input = document.getElementById("numprocs-input");
@@ -1076,10 +1398,12 @@
     document.querySelectorAll(".tab-button").forEach((button) => {
       button.addEventListener("click", () => selectTab(button.dataset.tab));
     });
+    scanForm.addEventListener("submit", submitScan);
     refreshLinks();
-    loadConfig();
+    loadConfig().then(() => setScanFormEnabled(Boolean(latestConfig.writeEnabled)));
     loadCollections();
     refreshCacheStats();
+    refreshJobs();
     loadViewerConfig().finally(() => logLine([
       `Origin: ${window.location.origin}`,
       `WMS: ${capabilitiesUrl}`,
