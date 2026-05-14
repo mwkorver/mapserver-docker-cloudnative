@@ -11,6 +11,7 @@ Mercator footprint index for browser/admin display.
 import argparse
 import datetime as dt
 import json
+import math
 import os
 import re
 import sys
@@ -190,11 +191,18 @@ def scan_key(args):
         "properties": properties,
         "geometry": {"type": "Polygon", "coordinates": [native_ring]},
     }
-    web = {
-        "type": "Feature",
-        "properties": properties,
-        "geometry": {"type": "Polygon", "coordinates": [web_ring]},
-    }
+    # If the EPSG:3089 → EPSG:3857 reprojection hit a "No inverse operation"
+    # case (some COGs near the projection's edge produce inf/nan output),
+    # drop the web feature. The native footprint is still usable for the
+    # raster TILEINDEX; we just lose this row in the web-mercator overlay.
+    if all(math.isfinite(c) for pt in web_ring for c in pt):
+        web = {
+            "type": "Feature",
+            "properties": properties,
+            "geometry": {"type": "Polygon", "coordinates": [web_ring]},
+        }
+    else:
+        web = None
     return native, web, epsg
 
 
@@ -212,14 +220,20 @@ def write_geojson(path, name, epsg, features):
 
 
 def features_bbox(features):
-    """Return [minx, miny, maxx, maxy] across all rings."""
+    """Return [minx, miny, maxx, maxy] across all rings, skipping non-finite points.
+
+    Defensive against the same projection-edge failures that scan_key already
+    drops at the feature level — even one inf in here would poison min/max.
+    """
     xs, ys = [], []
     for f in features:
         coords = f["geometry"]["coordinates"]
         for ring in coords if isinstance(coords[0][0], list) else [coords]:
             for x, y in ring:
-                xs.append(float(x))
-                ys.append(float(y))
+                x, y = float(x), float(y)
+                if math.isfinite(x) and math.isfinite(y):
+                    xs.append(x)
+                    ys.append(y)
     return [min(xs), min(ys), max(xs), max(ys)] if xs else None
 
 
@@ -301,18 +315,30 @@ def main():
         for key in keys
     ]
 
+    dropped_web = 0
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = [executor.submit(scan_key, item) for item in work]
         for index, future in enumerate(as_completed(futures), start=1):
             try:
                 native, web, epsg = future.result()
                 native_features.append(native)
-                web_features.append(web)
+                if web is not None:
+                    web_features.append(web)
+                else:
+                    dropped_web += 1
                 epsg_values.add(epsg)
             except Exception as exc:
                 failures.append(str(exc))
             if index % args.progress_every == 0 or index == len(futures):
                 print(f"Scanned {index}/{len(futures)}; failures={len(failures)}", flush=True)
+
+    if dropped_web:
+        print(
+            f"WARN: {dropped_web} COG(s) produced non-finite EPSG:3857 footprints "
+            f"(typical at projection edges); dropped from web overlay only — "
+            f"native tileindex retains all {len(native_features)} COGs.",
+            file=sys.stderr, flush=True,
+        )
 
     if failures:
         print("Failures:", file=sys.stderr)
@@ -381,6 +407,19 @@ def main():
         extent_native = round_bbox(features_bbox(native_features), 2)
         extent_3857 = round_bbox(features_bbox(web_features), 0)
         bbox_4326 = round_bbox(reproject_bbox(extent_3857, WEB_MERCATOR_EPSG, WGS84_EPSG), 4)
+
+        # Belt-and-suspenders: even though we filter inf/nan upstream, if
+        # something exotic slips through don't crash the whole upsert here.
+        def _safe_int_bbox(bbox):
+            if not bbox:
+                return None
+            try:
+                return [int(round(v)) for v in bbox if math.isfinite(v)] if len(bbox) == 4 else None
+            except (OverflowError, ValueError):
+                return None
+        extent_3857_int = _safe_int_bbox(extent_3857)
+        if extent_3857_int is None or len(extent_3857_int) != 4:
+            extent_3857_int = None
         layer_name = args.layer_name or slugify(args.collection)
         map_name = args.map_name or f"{slugify(args.collection)}-imagery"
         label = args.label or args.collection
@@ -404,7 +443,7 @@ def main():
             "native_epsg": int(source_epsg),
             "cog_count": len(native_features),
             "bbox_4326": bbox_4326,
-            "extent_3857": [int(v) for v in extent_3857] if extent_3857 else None,
+            "extent_3857": extent_3857_int,
             "extent_native": extent_native,
             "tileindex_geojson": os.path.abspath(args.output_native),
             "footprints_geojson": os.path.abspath(args.output_web),
