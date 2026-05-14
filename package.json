@@ -1,0 +1,12 @@
+{
+  "name": "mapserver-docker-cloudnative",
+  "private": true,
+  "scripts": {
+    "test": "npm run test:ui",
+    "test:ui": "playwright test",
+    "test:ui:headed": "playwright test --headed"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.52.0"
+  }
+}
