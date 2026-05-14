@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "collections": [
+    {
+      "id": "ky-2024-3in",
+      "layer_name": "ky-2024",
+      "map_name": "ky-imagery",
+      "label": "KyFromAbove 2024 Season 1 (3 in)",
+      "attribution": "KyFromAbove / Commonwealth of Kentucky",
+      "enabled": true,
+      "min_zoom": 18,
+      "max_zoom": 22,
+      "draw_order": 20,
+      "source": {
+        "bucket": "kyfromabove",
+        "prefix": "imagery/orthos/Phase3/KY_KYAPED_2024_Season1_3IN/",
+        "region": "us-west-2",
+        "access_mode": "unsigned",
+        "requester_pays": false
+      },
+      "native_epsg": 3089,
+      "cog_count": 400,
+      "bbox_4326": [-85.5063, 37.8079, -85.2515, 38.0876],
+      "extent_3857": [-9523010, 4551082, -9484253, 4590002],
+      "extent_native": [4980000, 3815000, 5080000, 3915000],
+      "tileindex_geojson": "/usr/src/mapfiles/ky_20x20_tileindex_3089.geojson",
+      "footprints_geojson": "/usr/src/mapfiles/ky_20x20_tileindex.geojson",
+      "postgis": false,
+      "indexed_at": "2026-05-01T00:00:00Z"
+    },
+    {
+      "id": "nj-2020-1ft",
+      "layer_name": "nj-2020",
+      "map_name": "nj-imagery",
+      "label": "New Jersey 2020 1-foot Imagery",
+      "attribution": "NJ Office of GIS / NJGIN",
+      "enabled": false,
+      "min_zoom": 14,
+      "max_zoom": 22,
+      "draw_order": 10,
+      "source": {
+        "bucket": "njogis-imagery",
+        "prefix": "2020/cog/",
+        "region": "us-west-2",
+        "access_mode": "unsigned",
+        "requester_pays": false
+      },
+      "native_epsg": 6527,
+      "cog_count": 9202,
+      "bbox_4326": [-75.5594, 38.8718, -73.8868, 41.3577],
+      "extent_3857": [-8412731, 4709462, -8223562, 5067461],
+      "extent_native": [190000, 30000, 665000, 925000],
+      "tileindex_geojson": "/usr/src/mapfiles/nj_2020_tileindex_6527.geojson",
+      "footprints_geojson": "/usr/src/mapfiles/nj_2020_footprints_3857.geojson",
+      "postgis": false,
+      "indexed_at": "2026-05-12T00:00:00Z"
+    }
+  ]
+}
