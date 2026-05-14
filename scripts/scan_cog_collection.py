@@ -141,6 +141,11 @@ def scan_key(args):
     source_srs.ImportFromWkt(projection)
     source_srs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
     epsg = source_srs.GetAuthorityCode(None) or source_srs.GetAuthorityCode("PROJCS")
+    # Some COGs have valid WKT but no AUTHORITY tag — AutoIdentifyEPSG
+    # asks GDAL's EPSG database to match the WKT parameters back to an
+    # EPSG code. Returns 0 on success (OGRERR_NONE).
+    if epsg is None and source_srs.AutoIdentifyEPSG() == 0:
+        epsg = source_srs.GetAuthorityCode(None) or source_srs.GetAuthorityCode("PROJCS")
     if epsg is not None:
         epsg = int(epsg)
     elif source_epsg_override:
@@ -315,10 +320,51 @@ def main():
             print(f"  {failure}", file=sys.stderr)
         raise SystemExit(f"Failed to scan {len(failures)} COGs")
 
-    if None in epsg_values and args.source_epsg:
+    none_count = sum(1 for f in native_features if f["properties"].get("epsg") is None)
+    resolved = sorted({e for e in epsg_values if e is not None})
+
+    if args.source_epsg and None in epsg_values:
+        # Explicit override — patch unidentified features and accept.
         epsg_values.discard(None)
+        for f in native_features:
+            if f["properties"].get("epsg") is None:
+                f["properties"]["epsg"] = args.source_epsg
+        for f in web_features:
+            if f["properties"].get("epsg") is None:
+                f["properties"]["epsg"] = args.source_epsg
+        if not epsg_values:
+            epsg_values.add(args.source_epsg)
+
+    elif len(resolved) == 1 and None in epsg_values:
+        # Only one real EPSG present + some COGs that lacked an AUTHORITY
+        # tag in their WKT. Geometric transformation already used the WKT,
+        # so the missing label is purely cosmetic — fill it in.
+        inferred = resolved[0]
+        print(
+            f"WARN: {none_count} COG(s) lacked an EPSG authority tag; "
+            f"inferred EPSG:{inferred} from the {len(native_features) - none_count} "
+            f"that did. Use --source-epsg to override.",
+            file=sys.stderr,
+            flush=True,
+        )
+        for f in native_features:
+            if f["properties"].get("epsg") is None:
+                f["properties"]["epsg"] = inferred
+        for f in web_features:
+            if f["properties"].get("epsg") is None:
+                f["properties"]["epsg"] = inferred
+        epsg_values = {inferred}
+
     if len(epsg_values) != 1:
-        raise SystemExit(f"Expected one source EPSG, found {sorted(str(value) for value in epsg_values)}")
+        counts = {}
+        for f in native_features:
+            e = f["properties"].get("epsg")
+            counts[e] = counts.get(e, 0) + 1
+        breakdown = ", ".join(f"EPSG:{k or 'unknown'}={v}" for k, v in sorted(counts.items(), key=lambda x: -x[1]))
+        raise SystemExit(
+            f"Expected one source EPSG but found multiple: {breakdown}. "
+            f"Pass --source-epsg <code> to force a single value, or split into separate collections."
+        )
     source_epsg = epsg_values.pop()
 
     native_features.sort(key=lambda feature: feature["properties"]["key"])
