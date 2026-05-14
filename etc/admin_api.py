@@ -40,89 +40,127 @@ STATIC_NGINX_CACHE_SETTINGS = {
     "headAndGetSeparate": True,
     "upstream": "http://127.0.0.1:9000",
 }
-DEFAULT_COLLECTIONS = {
-    "collections": [
-        {
-            "collectionName": "ky-2024-3in",
-            "layerName": "ky-2024",
-            "enabled": True,
-            "minZoom": 18,
-            "maxZoom": 22,
-            "drawOrder": 20,
-            "status": "example COG collection",
-            "sources": [
-                {
-                    "label": "KyFromAbove 2024 Season 1 3IN",
-                    "bucket": "kyfromabove",
-                    "prefix": "imagery/orthos/Phase3/KY_KYAPED_2024_Season1_3IN/",
-                    "region": "us-west-2",
-                    "accessMode": "unsigned",
-                    "requesterPays": False,
-                }
-            ],
-        },
-        {
-            "collectionName": "nj-2020-1ft",
-            "layerName": "nj-2020",
-            "enabled": False,
-            "minZoom": 14,
-            "maxZoom": 22,
-            "drawOrder": 10,
-            "status": "example COG collection",
-            "sources": [
-                {
-                    "label": "NJ 2020 COGs",
-                    "bucket": "njogis-imagery",
-                    "prefix": "2020/cog/",
-                    "region": "us-west-2",
-                    "accessMode": "unsigned",
-                    "requesterPays": False,
-                }
-            ],
-        },
-        {
-            "collectionName": "naip-ca-2022-rgb",
-            "layerName": "naip-ca-2022",
-            "enabled": False,
-            "minZoom": 12,
-            "maxZoom": 20,
-            "drawOrder": 5,
-            "status": "example requester-pays source",
-            "sources": [
-                {
-                    "label": "NAIP California 2022 RGB COGs",
-                    "bucket": "naip-visualization",
-                    "prefix": "ca/2022/60cm/rgb_cog/",
-                    "region": "us-west-2",
-                    "accessMode": "requester-pays",
-                    "requesterPays": True,
-                }
-            ],
-        },
-    ]
+# Fallback shape if collections.json is missing or empty. Keeps the admin
+# UI and viewer renderable on a fresh build before anyone has scanned.
+FALLBACK_VIEWER_CONFIG = {
+    "collectionName": "—",
+    "mapName": "imagery",
+    "layerName": "—",
+    "footprintUrl": "",
+    "bounds": [[37.0, -90.0], [42.0, -73.0]],
+    "center": [39.5, -82.0],
+    "imageryMinZoom": 14,
+    "attribution": "",
 }
-VIEWER_COLLECTIONS = {
-    "ky-2024-3in": {
-        "collectionName": "ky-2024-3in",
-        "mapName": "ky-imagery",
-        "layerName": "ky-2024",
-        "footprintUrl": "/ky_20x20_tileindex.geojson",
-        "bounds": [[37.81, -85.51], [38.08, -85.25]],
-        "center": [37.937085, -85.372578],
-        "imageryMinZoom": 18,
-        "attribution": "KyFromAbove / Commonwealth of Kentucky",
-    },
-    "nj-2020-1ft": {
-        "collectionName": "nj-2020-1ft",
-        "mapName": "nj-imagery",
-        "layerName": "nj-2020",
-        "footprintUrl": "/nj_2020_footprints_3857.geojson",
-        "bounds": [[38.87, -75.6], [41.36, -73.88]],
-        "center": [40.1, -74.7],
-        "imageryMinZoom": 14,
-        "attribution": "NJ Office of GIS / NJGIN",
-    },
-}
+
+
+def _read_collections():
+    """Read collections.json. Returns {} on any error (empty/missing/parse)."""
+    try:
+        return json.loads(COLLECTIONS_FILE.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _humanize_indexed_at(iso_string):
+    """Return e.g. '2h ago' from an ISO-8601 timestamp; '' if unparseable."""
+    if not iso_string:
+        return ""
+    try:
+        normalized = iso_string.replace("Z", "+00:00")
+        t = dt.datetime.fromisoformat(normalized)
+    except ValueError:
+        return ""
+    delta = dt.datetime.now(dt.timezone.utc) - t
+    seconds = int(delta.total_seconds())
+    if seconds < 60:
+        return f"{seconds}s ago"
+    if seconds < 3600:
+        return f"{seconds // 60}m ago"
+    if seconds < 86400:
+        return f"{seconds // 3600}h ago"
+    return f"{seconds // 86400}d ago"
+
+
+def _collection_status(collection):
+    """Build the "Status" column text from collection.json metadata."""
+    parts = []
+    cog_count = collection.get("cog_count")
+    if cog_count is not None:
+        parts.append(f"{cog_count:,} COGs")
+    indexed_at = collection.get("indexed_at")
+    if indexed_at:
+        rel = _humanize_indexed_at(indexed_at)
+        parts.append(f"indexed {rel}" if rel else f"indexed {indexed_at}")
+    if collection.get("postgis"):
+        parts.append("postgis")
+    return " · ".join(parts) if parts else "configured"
+
+
+def _collection_to_ui(collection):
+    """Convert a collections.json entry to the admin UI's expected shape."""
+    source = collection.get("source") or {}
+    return {
+        "collectionName": collection.get("id"),
+        "layerName": collection.get("layer_name") or collection.get("id"),
+        "enabled": bool(collection.get("enabled", True)),
+        "minZoom": collection.get("min_zoom"),
+        "maxZoom": collection.get("max_zoom"),
+        "drawOrder": collection.get("draw_order", 10),
+        "status": _collection_status(collection),
+        "sources": [
+            {
+                "label": collection.get("label") or collection.get("id"),
+                "bucket": source.get("bucket"),
+                "prefix": source.get("prefix"),
+                "region": source.get("region", "us-west-2"),
+                "accessMode": source.get("access_mode", "unsigned"),
+                "requesterPays": bool(source.get("requester_pays")),
+            }
+        ],
+    }
+
+
+def _bounds_from_bbox_4326(bbox):
+    """[minLon, minLat, maxLon, maxLat] -> [[minLat, minLon], [maxLat, maxLon]]."""
+    if not bbox or len(bbox) != 4:
+        return None
+    return [[bbox[1], bbox[0]], [bbox[3], bbox[2]]]
+
+
+def _center_from_bbox_4326(bbox):
+    """Midpoint as [lat, lon]."""
+    if not bbox or len(bbox) != 4:
+        return None
+    return [(bbox[1] + bbox[3]) / 2.0, (bbox[0] + bbox[2]) / 2.0]
+
+
+def _public_footprint_url(collection):
+    """Map an absolute footprints_geojson path to a public /mapfiles/{name} URL.
+
+    nginx has an alias `/mapfiles/` -> /usr/src/mapfiles so anything the
+    scanner writes is served back to the browser without further config.
+    """
+    raw = collection.get("footprints_geojson") or ""
+    if not raw:
+        return ""
+    basename = Path(raw).name
+    return f"/mapfiles/{basename}"
+
+
+def _collection_to_viewer(collection):
+    """Convert a collections.json entry to the viewer's expected shape."""
+    bbox = collection.get("bbox_4326")
+    return {
+        "collectionName": collection.get("id"),
+        "mapName": collection.get("map_name") or "imagery",
+        "layerName": collection.get("layer_name") or collection.get("id"),
+        "footprintUrl": _public_footprint_url(collection),
+        "bounds": _bounds_from_bbox_4326(bbox) or FALLBACK_VIEWER_CONFIG["bounds"],
+        "center": _center_from_bbox_4326(bbox) or FALLBACK_VIEWER_CONFIG["center"],
+        "imageryMinZoom": collection.get("min_zoom") or 14,
+        "attribution": collection.get("attribution", ""),
+    }
 
 
 def write_json(handler, status, payload):
@@ -334,22 +372,64 @@ def admin_config():
     return config
 
 
+def _active_collection(collections):
+    """Pick the active (default) collection.
+
+    Resolution order:
+      1. $LOCAL_COLLECTION env var if it matches an entry's id
+      2. First enabled collection in draw_order order
+      3. First collection at all
+    """
+    if not collections:
+        return None
+    explicit = os.environ.get("LOCAL_COLLECTION")
+    if explicit:
+        for c in collections:
+            if c.get("id") == explicit:
+                return c
+    enabled = [c for c in collections if c.get("enabled", True)]
+    enabled.sort(key=lambda c: c.get("draw_order", 10))
+    if enabled:
+        return enabled[0]
+    return collections[0]
+
+
 def collections_config():
-    active_collection = os.environ.get("LOCAL_COLLECTION", "ky-2024-3in")
-    collections = []
-    for collection in DEFAULT_COLLECTIONS["collections"]:
-        item = dict(collection)
-        item["enabled"] = item["collectionName"] == active_collection
-        item["status"] = "active local source" if item["enabled"] else item["status"]
-        collections.append(item)
-    return {"activeCollection": active_collection, "collections": collections}
+    """Admin UI shape: every entry in collections.json projected to the
+    legacy camelCase format the Collections table renderer expects.
+    """
+    doc = _read_collections()
+    collections = doc.get("collections", [])
+    active = _active_collection(collections)
+    active_id = active.get("id") if active else None
+
+    ui_collections = []
+    for c in collections:
+        ui_collections.append(_collection_to_ui(c))
+
+    # Sort: active first, then enabled, then by draw_order for stable display.
+    def _sort_key(item):
+        return (
+            0 if item["collectionName"] == active_id else 1,
+            0 if item["enabled"] else 1,
+            item.get("drawOrder", 10),
+        )
+    ui_collections.sort(key=_sort_key)
+
+    return {"activeCollection": active_id, "collections": ui_collections}
 
 
 def viewer_config():
-    active_collection = os.environ.get("LOCAL_COLLECTION", "ky-2024-3in")
-    config = dict(VIEWER_COLLECTIONS.get(active_collection, VIEWER_COLLECTIONS["ky-2024-3in"]))
+    """Viewer shape: the active collection's bounds/center/layer name."""
+    doc = _read_collections()
+    active = _active_collection(doc.get("collections", []))
+    if active is None:
+        return dict(FALLBACK_VIEWER_CONFIG)
+    config = _collection_to_viewer(active)
+    # Runtime override: admin UI can adjust imageryMinZoom for testing
+    # without re-scanning the collection.
     runtime = runtime_config()
-    if "IMAGERY_MIN_ZOOM" in os.environ:
+    if "imageryMinZoom" in runtime and runtime["imageryMinZoom"]:
         config["imageryMinZoom"] = runtime["imageryMinZoom"]
     return config
 
