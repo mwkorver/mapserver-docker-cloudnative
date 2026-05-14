@@ -202,7 +202,7 @@
 <body>
   <div id="toolbar">
     <label>WMS URL:</label>
-    <input id="wms-url" type="text" value="http://localhost:8081/mapserv" />
+    <input id="wms-url" type="text" />
     <button id="apply-btn">Apply</button>
     <button id="perf-toggle">Perf</button>
   </div>
@@ -234,12 +234,36 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
+    if (window.location.protocol === 'file:') {
+      window.location.replace('http://localhost:8081/viewer/');
+    }
+
     const PERF_API_URL = '';
 
-    const LOCAL_PREVIEW_BOUNDS = [[37.81, -85.51], [38.08, -85.25]];
-    const IMAGERY_MIN_ZOOM = 18;
+    function loadViewerConfig() {
+      try {
+        const request = new XMLHttpRequest();
+        request.open('GET', '/viewer/config.json', false);
+        request.send(null);
+        if (request.status >= 200 && request.status < 300) {
+          return JSON.parse(request.responseText);
+        }
+      } catch (error) {
+        console.warn('viewer config unavailable; using defaults', error);
+      }
+      return {};
+    }
+
+    const VIEWER_CONFIG = loadViewerConfig();
+    const LOCAL_PREVIEW_BOUNDS = VIEWER_CONFIG.bounds || [[37.81, -85.51], [38.08, -85.25]];
+    const IMAGERY_MIN_ZOOM = VIEWER_CONFIG.imageryMinZoom || 18;
     const COG_LABEL_MIN_ZOOM = 15;
-    const DEFAULT_VIEW = { center: [37.937085, -85.372578], zoom: IMAGERY_MIN_ZOOM - 1 };
+    const WMS_LAYER_NAME = VIEWER_CONFIG.layerName || 'ky-2024';
+    const MAP_NAME = VIEWER_CONFIG.mapName || 'ky-imagery';
+    const FOOTPRINT_URL = VIEWER_CONFIG.footprintUrl || '/ky_20x20_tileindex.geojson';
+    const ATTRIBUTION = VIEWER_CONFIG.attribution || 'Imagery collection';
+    const DEFAULT_WMS_URL = window.location.origin + '/mapserv';
+    const DEFAULT_VIEW = { center: VIEWER_CONFIG.center || [37.937085, -85.372578], zoom: IMAGERY_MIN_ZOOM - 1 };
     const map = L.map('map', { maxZoom: 22 }).setView(DEFAULT_VIEW.center, DEFAULT_VIEW.zoom);
 
     const LayerInfoControl = L.Control.extend({
@@ -261,7 +285,7 @@
         } else {
           this._div.innerHTML =
             '<div class="layer-row"><span class="swatch" style="background:#e06020;opacity:0.6;border:1px solid #e06020"></span>COG Footprints' + countStr + '</div>' +
-            '<div class="layer-row"><span class="swatch" style="background:#4a9eff"></span>WMS: ky-2024</div>' +
+            '<div class="layer-row"><span class="swatch" style="background:#4a9eff"></span>WMS: ' + WMS_LAYER_NAME + '</div>' +
             '<div class="layer-row" style="color:#888;padding-left:18px;font-size:11px">zoom: ' + zoom + '</div>';
         }
       }
@@ -290,11 +314,7 @@
     }).addTo(map);
 
     function fetchFootprints() {
-      if (!ogcApiBase) return;
-      const b = map.getBounds();
-      const bbox = b.getWest().toFixed(6) + ',' + b.getSouth().toFixed(6) + ',' +
-                   b.getEast().toFixed(6) + ',' + b.getNorth().toFixed(6);
-      const url = ogcApiBase + '/collections/cog-extents/items?f=json&bbox=' + bbox + '&limit=10000';
+      const url = FOOTPRINT_URL;
 
       fetch(url)
         .then(r => r.json())
@@ -386,7 +406,7 @@
 
     function buildWmsLayer(url) {
       const layer = L.tileLayer.wms(url, {
-        layers: 'ky-2024',
+        layers: WMS_LAYER_NAME,
         format: 'image/png',
         transparent: false,
         version: '1.3.0',
@@ -395,7 +415,7 @@
         keepBuffer: 1,
         updateWhenIdle: true,
         updateWhenZooming: false,
-        attribution: 'KyFromAbove / Commonwealth of Kentucky'
+        attribution: ATTRIBUTION
       });
       layer.on('tileloadstart', (e) => {
         tileTimers.set(e.tile, performance.now());
@@ -429,7 +449,7 @@
     function applyUrl() {
       const url = document.getElementById('wms-url').value.trim();
       if (!url) return;
-      ogcApiBase = new URL(url).origin + '/mapserv/ky-imagery/ogcapi';
+      ogcApiBase = new URL(url).origin + '/mapserv/' + MAP_NAME + '/ogcapi';
       if (imageryLayer) map.removeLayer(imageryLayer);
       if (tileTimeLayer) map.removeLayer(tileTimeLayer);
       tileTimeCells.clear();
@@ -441,6 +461,7 @@
       fetchFootprints();
     }
 
+    document.getElementById('wms-url').value = DEFAULT_WMS_URL;
     document.getElementById('apply-btn').addEventListener('click', applyUrl);
     document.getElementById('wms-url').addEventListener('keydown', (e) => {
       if (e.key === 'Enter') applyUrl();
