@@ -289,14 +289,26 @@ cat >/usr/src/admin/config.json <<EOF
 }
 EOF
 
-if [ -z "$DB_SECRET_ARN" ] && [ -z "$DB_HOST" ]; then
-    echo "No database configuration found; enabling local preview mapfile."
-    write_local_preview_mapfile
+# Mapfile generation order:
+#   1. If MAPFILE_S3_URI was downloaded above, leave it alone (user override).
+#   2. Else, run mapfile_generator.py against collections.json. Picks POSTGIS
+#      or OGR backend per layer based on DB_HOST + collection.postgis flag.
+#   3. As a safety net, envsubst whatever ${...} placeholders remain (for
+#      hand-written mapfiles uploaded via MAPFILE_S3_URI).
+if [ -z "$MAPFILE_S3_URI" ] || [ ! -s /usr/src/mapfiles/mapfile.map ]; then
+    if [ -f /etc/mapfile_generator.py ]; then
+        echo "Generating mapfile from collections.json..."
+        python3 /etc/mapfile_generator.py
+    elif [ -z "$DB_SECRET_ARN" ] && [ -z "$DB_HOST" ]; then
+        # Fallback: legacy bash heredoc local-preview mode (kept until the
+        # generator is the only path everyone uses).
+        echo "No database and no generator; falling back to bundled preview."
+        write_local_preview_mapfile
+    fi
 fi
 
-# Render the mapfile template — substitutes ${DB_HOST}, ${DB_PORT}, etc.
 if [ -f /usr/src/mapfiles/mapfile.map ]; then
-    echo "Rendering mapfile with envsubst..."
+    echo "Running envsubst on mapfile (safety net for hand-written templates)..."
     envsubst < /usr/src/mapfiles/mapfile.map > /usr/src/mapfiles/mapfile.rendered.map
     mv /usr/src/mapfiles/mapfile.rendered.map /usr/src/mapfiles/mapfile.map
 fi
