@@ -89,6 +89,7 @@ RUN ln -sf /etc/nginx/sites-available/mapserver_proxy.conf /etc/nginx/sites-enab
     chmod +x /etc/entrypoint.sh && \
     chmod +x /etc/s3_sigv4_proxy.py && \
     chmod +x /etc/admin_api.py && \
+    chmod +x /etc/mapfile_generator.py && \
     mkdir -p /var/cache/nginx/cog && \
     chown -R www-data:www-data /var/cache/nginx
 COPY mapfiles /usr/src/mapfiles
