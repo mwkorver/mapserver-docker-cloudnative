@@ -34,6 +34,7 @@ CREATE TABLE cog_index (
     location    TEXT UNIQUE NOT NULL,
     file_name   TEXT NOT NULL,
     geom        GEOMETRY(MultiPolygon, 3857) NOT NULL,
+    geom_3089   GEOMETRY(MultiPolygon, 3089) NOT NULL,
     res_m       DOUBLE PRECISION,
     width       INT,
     height      INT,
@@ -41,6 +42,7 @@ CREATE TABLE cog_index (
 );
 
 CREATE INDEX cog_index_geom_idx ON cog_index USING GIST(geom);
+CREATE INDEX cog_index_geom_3089_idx ON cog_index USING GIST(geom_3089);
 CREATE INDEX cog_index_file_name_trgm ON cog_index USING GIN(file_name gin_trgm_ops);
 
 CREATE TABLE IF NOT EXISTS tile_status (

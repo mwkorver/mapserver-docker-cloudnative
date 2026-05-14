@@ -69,16 +69,18 @@ def main(event: dict[str, Any], context):
                 location = f"{vsi_base}/{key.lstrip('/')}"
                 file_name = key.rsplit("/", 1)[-1]
                 placeholders.append(
-                    "(%s, %s, ST_SetSRID(ST_GeomFromGeoJSON(%s), 3857))"
+                    "(%s, %s, ST_SetSRID(ST_GeomFromGeoJSON(%s), 3857), "
+                    "ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON(%s), 3857), 3089))"
                 )
-                args.extend([location, file_name, json.dumps(geom)])
+                geom_json = json.dumps(geom)
+                args.extend([location, file_name, geom_json, geom_json])
 
             if not placeholders:
                 continue
 
             cur.execute(
                 f"""
-                INSERT INTO cog_index (location, file_name, geom)
+                INSERT INTO cog_index (location, file_name, geom, geom_3089)
                 VALUES {",".join(placeholders)}
                 ON CONFLICT (location) DO NOTHING
                 """,
