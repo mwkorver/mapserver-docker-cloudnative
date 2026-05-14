@@ -1,0 +1,1092 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>MapServer Admin Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f4f6f8;
+      --panel: #ffffff;
+      --text: #17212b;
+      --muted: #607080;
+      --border: #d9e0e7;
+      --good: #18794e;
+      --warn: #ad5700;
+      --bad: #c92a2a;
+      --accent: #2563eb;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.45;
+    }
+
+    header {
+      background: #0f172a;
+      color: white;
+      padding: 20px 28px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 22px;
+      font-weight: 650;
+    }
+
+    header p {
+      margin: 6px 0 0;
+      color: #cbd5e1;
+      font-size: 14px;
+    }
+
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+      padding: 16px;
+    }
+
+    .panel h2 {
+      margin: 0 0 12px;
+      font-size: 16px;
+      font-weight: 650;
+    }
+
+    .metric {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 8px 0;
+      border-top: 1px solid #edf1f5;
+      font-size: 14px;
+    }
+
+    .metric:first-of-type { border-top: 0; padding-top: 0; }
+    .metric span:first-child { color: var(--muted); }
+    .metric span:last-child {
+      text-align: right;
+      font-weight: 600;
+      overflow-wrap: anywhere;
+    }
+
+    .table-wrapper {
+      overflow-x: auto;
+      border: 1px solid #edf1f5;
+      border-radius: 8px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    th, td {
+      padding: 9px 10px;
+      border-bottom: 1px solid #edf1f5;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      color: var(--muted);
+      font-weight: 650;
+      background: #f8fafc;
+      white-space: nowrap;
+    }
+
+    td {
+      overflow-wrap: anywhere;
+    }
+
+    tr:last-child td { border-bottom: 0; }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-weight: 700;
+    }
+
+    .status::before {
+      content: "";
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    .good { color: var(--good); }
+    .warn { color: var(--warn); }
+    .bad { color: var(--bad); }
+    .muted { color: var(--muted); }
+
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    pre {
+      margin: 0;
+      padding: 12px;
+      background: #0f172a;
+      color: #e2e8f0;
+      border-radius: 8px;
+      overflow: auto;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    button {
+      border: 1px solid var(--border);
+      background: white;
+      color: var(--text);
+      border-radius: 8px;
+      padding: 8px 12px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    button:hover { border-color: var(--accent); color: var(--accent); }
+    button.dirty {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: white;
+    }
+    button.dirty:hover {
+      background: #1d4ed8;
+      color: white;
+    }
+    button:disabled {
+      cursor: not-allowed;
+      color: #94a3b8;
+      border-color: var(--border);
+      background: #f8fafc;
+    }
+
+    input[type="number"], input[type="text"] {
+      width: 72px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 7px 8px;
+      font: inherit;
+    }
+
+    .inline-form {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 0;
+      border-top: 1px solid #edf1f5;
+      font-size: 14px;
+    }
+
+    .inline-form label { color: var(--muted); }
+    .inline-form div { display: flex; gap: 8px; align-items: center; }
+
+    .radio-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .radio-option {
+      display: inline-flex;
+      gap: 4px;
+      align-items: center;
+      color: var(--text);
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .timestamp {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .tab-button {
+      border: 0;
+      border-bottom: 3px solid transparent;
+      border-radius: 8px 8px 0 0;
+      background: transparent;
+      padding: 10px 14px;
+    }
+
+    .tab-button.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+      background: #eef4ff;
+    }
+
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    .viewer-frame {
+      width: 100%;
+      height: 620px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: white;
+    }
+
+  </style>
+</head>
+<body>
+  <header>
+    <h1>MapServer Admin Dashboard</h1>
+    <p>Read-only runtime view for local and AWS deployments.</p>
+  </header>
+
+  <main>
+    <div class="tabs" role="tablist" aria-label="Admin sections">
+      <button class="tab-button active" data-tab="collections" role="tab" aria-selected="true">Collections</button>
+      <button class="tab-button" data-tab="runtime" role="tab" aria-selected="false">Runtime</button>
+      <button class="tab-button" data-tab="cache" role="tab" aria-selected="false">Cache</button>
+      <button class="tab-button" data-tab="visualize" role="tab" aria-selected="false">Visualize</button>
+      <button class="tab-button" data-tab="benchmark" role="tab" aria-selected="false">Benchmark</button>
+    </div>
+
+    <section id="tab-collections" class="tab-panel active">
+      <div class="grid">
+        <div class="panel">
+          <h2>Collections</h2>
+          <div class="metric">
+            <span>Config mode</span>
+            <span>read-only examples</span>
+          </div>
+          <div class="metric">
+            <span>Collection count</span>
+            <span id="collection-count">—</span>
+          </div>
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Collection</th>
+                  <th>WMS layer</th>
+                  <th>Enabled</th>
+                  <th>Zoom</th>
+                  <th>Sources</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="collections-body">
+                <tr><td colspan="6">Loading collections…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>Collection Sources</h2>
+          <div class="metric">
+            <span>Source model</span>
+            <span>bucket + prefix + access</span>
+          </div>
+          <div class="metric">
+            <span>Next workflow</span>
+            <span>validate, build tile index, apply</span>
+          </div>
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Collection</th>
+                  <th>Label</th>
+                  <th>Bucket</th>
+                  <th>Prefix</th>
+                  <th>Access</th>
+                </tr>
+              </thead>
+              <tbody id="collection-sources-body">
+                <tr><td colspan="5">Loading sources…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="tab-runtime" class="tab-panel">
+      <div class="actions">
+        <button id="refresh">Refresh checks</button>
+        <div class="timestamp" id="updated">Not checked yet</div>
+      </div>
+
+      <div class="grid">
+        <div class="panel">
+          <h2>Service Health</h2>
+          <div class="metric">
+            <span>WMS GetCapabilities</span>
+            <span id="wms-status" class="status muted">not checked</span>
+          </div>
+          <div class="metric">
+            <span>WMS response time</span>
+            <span id="wms-time">—</span>
+          </div>
+          <div class="metric">
+            <span>Viewer</span>
+            <span><a id="viewer-link" href="/viewer/">open</a></span>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>Runtime Config</h2>
+          <div class="metric">
+            <span>WMS endpoint</span>
+            <span id="wms-url">/mapserv</span>
+          </div>
+          <div class="metric">
+            <span>Imagery min zoom</span>
+            <span id="imagery-min-zoom-display">—</span>
+          </div>
+          <div class="metric">
+            <span>MapServer workers</span>
+            <span id="mapserver-workers">—</span>
+          </div>
+          <div class="inline-form">
+            <label for="numprocs-input">Set workers</label>
+            <div>
+              <input id="numprocs-input" type="number" min="1" max="32" step="1" disabled />
+              <button id="numprocs-save" disabled>Apply</button>
+            </div>
+          </div>
+          <div class="metric">
+            <span>Worker edits</span>
+            <span id="numprocs-write-status">checking</span>
+          </div>
+          <div class="metric">
+            <span>Update status</span>
+            <span id="numprocs-status">—</span>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>GDAL / Viewer Tuning</h2>
+          <div class="inline-form">
+            <label for="gdal-cachemax-input">GDAL_CACHEMAX MB</label>
+            <div>
+              <input id="gdal-cachemax-input" type="number" min="0" max="65536" step="64" disabled />
+            </div>
+          </div>
+          <div class="inline-form">
+            <label for="vsi-cache-input">VSI_CACHE_SIZE MB</label>
+            <div>
+              <input id="vsi-cache-input" type="number" min="0" max="65536" step="64" disabled />
+            </div>
+          </div>
+          <div class="inline-form">
+            <label for="imagery-min-zoom-input">Imagery min zoom</label>
+            <div>
+              <input id="imagery-min-zoom-input" type="number" min="0" max="22" step="1" disabled />
+            </div>
+          </div>
+          <div class="inline-form">
+            <label for="mapserver-debug-input">MapServer/GDAL debug</label>
+            <div>
+              <input id="mapserver-debug-input" type="checkbox" disabled />
+            </div>
+          </div>
+          <div class="inline-form">
+            <label>Apply tuning</label>
+            <div>
+              <button id="runtime-save" disabled>Apply</button>
+            </div>
+          </div>
+          <div class="metric">
+            <span>Update status</span>
+            <span id="runtime-status">—</span>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>COG Index</h2>
+          <div class="metric">
+            <span>Local footprint file</span>
+            <span id="footprint-status" class="status muted">not checked</span>
+          </div>
+          <div class="metric">
+            <span>Footprint count</span>
+            <span id="footprint-count">—</span>
+          </div>
+          <div class="metric">
+            <span>Index mode</span>
+            <span>PostGIS in AWS, GeoJSON locally</span>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>Deployment</h2>
+          <div class="metric">
+            <span>Fargate CPU</span>
+            <span id="fargate-cpu">—</span>
+          </div>
+          <div class="metric">
+            <span>Fargate memory</span>
+            <span id="fargate-memory">—</span>
+          </div>
+          <div class="metric">
+            <span>S3 signing</span>
+            <span id="s3-signing">—</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="tab-cache" class="tab-panel">
+      <div class="grid">
+        <div class="panel">
+          <h2>nginx Cache</h2>
+          <div class="metric">
+            <span>Cache path</span>
+            <span id="nginx-cache-path">—</span>
+          </div>
+          <div class="metric">
+            <span>Cached files</span>
+            <span id="nginx-cache-files">—</span>
+          </div>
+          <div class="metric">
+            <span>Cache size</span>
+            <span id="nginx-cache-size">—</span>
+          </div>
+          <div class="metric">
+            <span>Last refreshed</span>
+            <span id="nginx-cache-updated">not checked</span>
+          </div>
+          <div class="inline-form">
+            <label for="nginx-cache-max-size-input">Max cache size</label>
+            <div>
+              <input id="nginx-cache-max-size-input" type="number" min="1" max="1000" step="1" disabled />
+              <span>GB</span>
+            </div>
+          </div>
+          <div class="inline-form">
+            <label>200/206 TTL</label>
+            <div class="radio-group" id="nginx-cache-ttl-group">
+              <label class="radio-option"><input type="radio" name="nginx-cache-ttl" value="1h" disabled />1h</label>
+              <label class="radio-option"><input type="radio" name="nginx-cache-ttl" value="6h" disabled />6h</label>
+              <label class="radio-option"><input type="radio" name="nginx-cache-ttl" value="24h" disabled />24h</label>
+              <label class="radio-option"><input type="radio" name="nginx-cache-ttl" value="7d" disabled />7d</label>
+            </div>
+          </div>
+          <div class="inline-form">
+            <label>404 TTL</label>
+            <div class="radio-group" id="nginx-cache-404-ttl-group">
+              <label class="radio-option"><input type="radio" name="nginx-cache-404-ttl" value="1m" disabled />1m</label>
+              <label class="radio-option"><input type="radio" name="nginx-cache-404-ttl" value="5m" disabled />5m</label>
+              <label class="radio-option"><input type="radio" name="nginx-cache-404-ttl" value="15m" disabled />15m</label>
+            </div>
+          </div>
+          <div class="inline-form">
+            <label>Apply cache config</label>
+            <div>
+              <button id="cache-config-save" disabled>Apply</button>
+            </div>
+          </div>
+          <div class="metric">
+            <span>Config status</span>
+            <span id="cache-config-status">—</span>
+          </div>
+          <div class="inline-form">
+            <label>Refresh cache stats</label>
+            <div>
+              <button id="cache-refresh">Refresh</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>Static Cache Safety Settings</h2>
+          <div class="metric">
+            <span>Cache key</span>
+            <span id="nginx-cache-key">—</span>
+          </div>
+          <div class="metric">
+            <span>HEAD conversion</span>
+            <span id="nginx-cache-head">—</span>
+          </div>
+          <div class="metric">
+            <span>Cache lock</span>
+            <span id="nginx-cache-lock">—</span>
+          </div>
+          <div class="metric">
+            <span>Cached statuses</span>
+            <span id="nginx-cache-statuses">—</span>
+          </div>
+          <div class="metric">
+            <span>Upstream signer</span>
+            <span id="nginx-cache-upstream">—</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="tab-visualize" class="tab-panel">
+      <div class="grid">
+        <div class="panel">
+          <h2>Map Preview</h2>
+          <div class="metric">
+            <span>Embedded viewer</span>
+            <span><a id="viewer-full-link" href="/viewer/" target="_blank" rel="noopener">open full viewer</a></span>
+          </div>
+          <iframe id="viewer-frame" class="viewer-frame" src="/viewer/" title="Map preview"></iframe>
+        </div>
+
+        <div class="panel">
+          <h2>Quick Links</h2>
+          <div class="metric">
+            <span>WMS endpoint</span>
+            <span><a id="mapserv-link" href="/mapserv" target="_blank" rel="noopener">/mapserv</a></span>
+          </div>
+          <div class="metric">
+            <span>GetCapabilities</span>
+            <span><a id="capabilities-link" href="/mapserv?SERVICE=WMS&amp;VERSION=1.3.0&amp;REQUEST=GetCapabilities" target="_blank" rel="noopener">open</a></span>
+          </div>
+          <div class="metric">
+            <span>Footprints GeoJSON</span>
+            <span><a id="footprints-link" href="/ky_20x20_tileindex.geojson" target="_blank" rel="noopener">open</a></span>
+          </div>
+          <div class="metric">
+            <span>Viewer config</span>
+            <span><a id="viewer-config-link" href="/viewer/config.json" target="_blank" rel="noopener">open</a></span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="tab-benchmark" class="tab-panel">
+      <div class="grid">
+        <div class="panel">
+          <h2>Benchmark</h2>
+          <div class="metric">
+            <span>Status</span>
+            <span>planned</span>
+          </div>
+          <div class="metric">
+            <span>First test target</span>
+            <span>browser-driven WMS tile samples</span>
+          </div>
+          <div class="metric">
+            <span>Measurements</span>
+            <span>p50/p95 tile time, cache before/after</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Recent Check Output</h2>
+      <pre id="log">Waiting for first refresh…</pre>
+    </section>
+  </main>
+
+  <script>
+    if (window.location.protocol === "file:") {
+      window.location.replace("http://localhost:8081/admin/");
+    }
+
+    const wmsUrl = `${window.location.origin}/mapserv`;
+    const capabilitiesUrl = `${wmsUrl}?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetCapabilities`;
+    let footprintUrl = `${window.location.origin}/ky_20x20_tileindex.geojson`;
+    const viewerConfigUrl = `${window.location.origin}/viewer/config.json`;
+    const configUrl = `${window.location.origin}/admin/config.json`;
+    const numprocsUrl = `${window.location.origin}/admin/api/numprocs`;
+    const runtimeUrl = `${window.location.origin}/admin/api/runtime`;
+    const nginxCacheUrl = `${window.location.origin}/admin/api/nginx-cache`;
+    const collectionsUrl = `${window.location.origin}/admin/api/collections`;
+
+    document.getElementById("wms-url").textContent = wmsUrl;
+    let latestConfig = {};
+
+    async function loadViewerConfig() {
+      try {
+        const { response } = await timedFetch(viewerConfigUrl, { timeoutMs: 5000 });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const viewerConfig = await response.json();
+        if (viewerConfig.footprintUrl) {
+          footprintUrl = new URL(viewerConfig.footprintUrl, window.location.origin).toString();
+        }
+        refreshLinks();
+        return viewerConfig;
+      } catch (error) {
+        return {};
+      }
+    }
+
+    function setStatus(id, label, className) {
+      const element = document.getElementById(id);
+      element.textContent = label;
+      element.className = `status ${className}`;
+    }
+
+    function logLine(lines) {
+      document.getElementById("log").textContent = lines.join("\n");
+      document.getElementById("updated").textContent = `Last checked ${new Date().toLocaleString()}`;
+    }
+
+    function setRadioValue(name, value) {
+      document.querySelectorAll(`input[name="${name}"]`).forEach((input) => {
+        input.checked = input.value === value;
+      });
+    }
+
+    function getRadioValue(name) {
+      const checked = document.querySelector(`input[name="${name}"]:checked`);
+      return checked ? checked.value : "";
+    }
+
+    function setRadioDisabled(name, disabled) {
+      document.querySelectorAll(`input[name="${name}"]`).forEach((input) => {
+        input.disabled = disabled;
+      });
+    }
+
+    function setDirtyButton(buttonId, dirty) {
+      const button = document.getElementById(buttonId);
+      button.classList.toggle("dirty", dirty);
+      button.disabled = !latestConfig.writeEnabled || !dirty;
+    }
+
+    function setLink(id, href, label = null) {
+      const link = document.getElementById(id);
+      link.href = href;
+      if (label !== null) link.textContent = label;
+    }
+
+    function refreshLinks() {
+      const viewerUrl = `${window.location.origin}/viewer/`;
+      setLink("viewer-link", viewerUrl, "open");
+      setLink("viewer-full-link", viewerUrl, "open full viewer");
+      document.getElementById("viewer-frame").src = viewerUrl;
+      setLink("mapserv-link", wmsUrl, wmsUrl);
+      setLink("capabilities-link", capabilitiesUrl, "open");
+      setLink("footprints-link", footprintUrl, new URL(footprintUrl).pathname);
+      setLink("viewer-config-link", viewerConfigUrl, "open");
+    }
+
+    function cacheMaxSizeGb() {
+      return Number.parseInt(document.getElementById("nginx-cache-max-size-input").value, 10);
+    }
+
+    function loadedCacheMaxSizeGb() {
+      return parseInt(latestConfig.nginxCacheMaxSize ?? "20g", 10);
+    }
+
+    function refreshDirtyState() {
+      if (!latestConfig || Object.keys(latestConfig).length === 0) return;
+      const numprocsDirty =
+        Number.parseInt(document.getElementById("numprocs-input").value, 10) !== latestConfig.mapserverNumprocs;
+      const runtimeDirty =
+        Number.parseInt(document.getElementById("gdal-cachemax-input").value, 10) !== latestConfig.gdalCacheMaxMb ||
+        Number.parseInt(document.getElementById("vsi-cache-input").value, 10) !== latestConfig.vsiCacheSizeMb ||
+        Number.parseInt(document.getElementById("imagery-min-zoom-input").value, 10) !== latestConfig.imageryMinZoom ||
+        document.getElementById("mapserver-debug-input").checked !== Boolean(latestConfig.mapserverDebug);
+      const cacheDirty =
+        cacheMaxSizeGb() !== loadedCacheMaxSizeGb() ||
+        getRadioValue("nginx-cache-ttl") !== latestConfig.nginxCacheTtl ||
+        getRadioValue("nginx-cache-404-ttl") !== latestConfig.nginxCache404Ttl;
+
+      setDirtyButton("numprocs-save", numprocsDirty);
+      setDirtyButton("runtime-save", runtimeDirty);
+      setDirtyButton("cache-config-save", cacheDirty);
+    }
+
+    async function timedFetch(url, options = {}) {
+      const timeoutMs = options.timeoutMs || 10000;
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+      const start = performance.now();
+      try {
+        const response = await fetch(url, {
+          cache: "no-store",
+          ...options,
+          signal: controller.signal,
+        });
+        const elapsedMs = Math.round(performance.now() - start);
+        return { response, elapsedMs };
+      } catch (error) {
+        if (error.name === "AbortError") {
+          throw new Error(`request timed out after ${timeoutMs} ms`);
+        }
+        throw error;
+      } finally {
+        window.clearTimeout(timeout);
+      }
+    }
+
+    async function checkWms(lines) {
+      try {
+        const { response, elapsedMs } = await timedFetch(capabilitiesUrl);
+        document.getElementById("wms-time").textContent = `${elapsedMs} ms`;
+        if (response.ok) {
+          setStatus("wms-status", "healthy", "good");
+        } else {
+          setStatus("wms-status", `HTTP ${response.status}`, "bad");
+        }
+        lines.push(`WMS GetCapabilities: HTTP ${response.status} in ${elapsedMs} ms`);
+      } catch (error) {
+        setStatus("wms-status", "unreachable", "bad");
+        document.getElementById("wms-time").textContent = "—";
+        lines.push(`WMS GetCapabilities: ${error.message}`);
+      }
+    }
+
+    async function checkFootprints(lines) {
+      try {
+        const { response, elapsedMs } = await timedFetch(footprintUrl);
+        if (!response.ok) {
+          setStatus("footprint-status", `HTTP ${response.status}`, "warn");
+          lines.push(`Footprints: HTTP ${response.status} in ${elapsedMs} ms`);
+          return;
+        }
+        const geojson = await response.json();
+        const count = Array.isArray(geojson.features) ? geojson.features.length : 0;
+        document.getElementById("footprint-count").textContent = count.toLocaleString();
+        setStatus("footprint-status", "available", "good");
+        lines.push(`Footprints: ${count.toLocaleString()} features in ${elapsedMs} ms`);
+      } catch (error) {
+        setStatus("footprint-status", "unavailable", "warn");
+        lines.push(`Footprints: ${error.message}`);
+      }
+    }
+
+    async function refresh() {
+      const refreshButton = document.getElementById("refresh");
+      await loadViewerConfig();
+      const lines = [
+        `Origin: ${window.location.origin}`,
+        `WMS: ${capabilitiesUrl}`,
+        `Footprints: ${footprintUrl}`,
+        "",
+      ];
+      refreshButton.disabled = true;
+      refreshButton.textContent = "Checking…";
+      setStatus("wms-status", "checking", "muted");
+      setStatus("footprint-status", "checking", "muted");
+      try {
+        await Promise.all([checkWms(lines), checkFootprints(lines)]);
+        logLine(lines);
+      } finally {
+        refreshButton.disabled = false;
+        refreshButton.textContent = "Refresh checks";
+      }
+    }
+
+    async function loadConfig() {
+      try {
+        const { response } = await timedFetch(configUrl, { timeoutMs: 2000 });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        const config = await response.json();
+        latestConfig = config;
+        document.getElementById("mapserver-workers").textContent = config.mapserverNumprocs ?? "—";
+        document.getElementById("fargate-cpu").textContent = config.fargateCpu ?? "—";
+        document.getElementById("fargate-memory").textContent = config.fargateMemory ? `${config.fargateMemory} MB` : "—";
+        document.getElementById("s3-signing").textContent = config.s3Signing ?? "—";
+        document.getElementById("numprocs-input").value = config.mapserverNumprocs ?? "";
+        document.getElementById("numprocs-input").max = config.maxMapserverNumprocs ?? 32;
+        document.getElementById("numprocs-input").disabled = !config.writeEnabled;
+        document.getElementById("numprocs-write-status").textContent = config.writeEnabled ? "enabled" : "disabled";
+        document.getElementById("gdal-cachemax-input").value = config.gdalCacheMaxMb ?? 128;
+        document.getElementById("vsi-cache-input").value = config.vsiCacheSizeMb ?? 32;
+        document.getElementById("imagery-min-zoom-input").value = config.imageryMinZoom ?? 18;
+        document.getElementById("imagery-min-zoom-display").textContent = config.imageryMinZoom ?? "—";
+        document.getElementById("mapserver-debug-input").checked = Boolean(config.mapserverDebug);
+        document.getElementById("gdal-cachemax-input").disabled = !config.writeEnabled;
+        document.getElementById("vsi-cache-input").disabled = !config.writeEnabled;
+        document.getElementById("imagery-min-zoom-input").disabled = !config.writeEnabled;
+        document.getElementById("mapserver-debug-input").disabled = !config.writeEnabled;
+        document.getElementById("nginx-cache-max-size-input").value = parseInt(config.nginxCacheMaxSize ?? "20g", 10);
+        setRadioValue("nginx-cache-ttl", config.nginxCacheTtl ?? "24h");
+        setRadioValue("nginx-cache-404-ttl", config.nginxCache404Ttl ?? "1m");
+        document.getElementById("nginx-cache-max-size-input").disabled = !config.writeEnabled;
+        setRadioDisabled("nginx-cache-ttl", !config.writeEnabled);
+        setRadioDisabled("nginx-cache-404-ttl", !config.writeEnabled);
+        const staticCache = config.staticNginxCacheSettings || {};
+        document.getElementById("nginx-cache-key").textContent = staticCache.cacheKey ?? "—";
+        document.getElementById("nginx-cache-head").textContent = `proxy_cache_convert_head ${staticCache.proxyCacheConvertHead ?? "—"}`;
+        document.getElementById("nginx-cache-lock").textContent = `proxy_cache_lock ${staticCache.proxyCacheLock ?? "—"}`;
+        document.getElementById("nginx-cache-statuses").textContent = staticCache.cacheStatuses ?? "—";
+        document.getElementById("nginx-cache-upstream").textContent = staticCache.upstream ?? "—";
+        refreshDirtyState();
+      } catch (error) {
+        document.getElementById("mapserver-workers").textContent = "unknown";
+        document.getElementById("fargate-cpu").textContent = "unknown";
+        document.getElementById("fargate-memory").textContent = "unknown";
+        document.getElementById("s3-signing").textContent = "unknown";
+        document.getElementById("numprocs-write-status").textContent = "unknown";
+        document.getElementById("cache-config-status").textContent = "unknown";
+      }
+    }
+
+    function appendCell(row, value) {
+      const cell = document.createElement("td");
+      cell.textContent = value ?? "—";
+      row.appendChild(cell);
+    }
+
+    function renderCollections(payload) {
+      const collections = Array.isArray(payload.collections) ? payload.collections : [];
+      const collectionsBody = document.getElementById("collections-body");
+      const sourcesBody = document.getElementById("collection-sources-body");
+      collectionsBody.textContent = "";
+      sourcesBody.textContent = "";
+      document.getElementById("collection-count").textContent = collections.length.toLocaleString();
+
+      if (collections.length === 0) {
+        collectionsBody.innerHTML = '<tr><td colspan="6">No collections configured.</td></tr>';
+        sourcesBody.innerHTML = '<tr><td colspan="5">No sources configured.</td></tr>';
+        return;
+      }
+
+      collections.forEach((collection) => {
+        const row = document.createElement("tr");
+        appendCell(row, collection.collectionName);
+        appendCell(row, collection.layerName);
+        appendCell(row, collection.enabled ? "yes" : "no");
+        appendCell(row, `${collection.minZoom ?? "—"}-${collection.maxZoom ?? "—"}`);
+        appendCell(row, Array.isArray(collection.sources) ? collection.sources.length.toLocaleString() : "0");
+        appendCell(row, collection.status);
+        collectionsBody.appendChild(row);
+
+        (collection.sources || []).forEach((source) => {
+          const sourceRow = document.createElement("tr");
+          appendCell(sourceRow, collection.collectionName);
+          appendCell(sourceRow, source.label);
+          appendCell(sourceRow, source.bucket);
+          appendCell(sourceRow, source.prefix);
+          appendCell(sourceRow, source.requesterPays ? `${source.accessMode} (requester pays)` : source.accessMode);
+          sourcesBody.appendChild(sourceRow);
+        });
+      });
+    }
+
+    async function loadCollections() {
+      try {
+        const { response } = await timedFetch(collectionsUrl, { timeoutMs: 2000 });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        renderCollections(await response.json());
+      } catch (error) {
+        document.getElementById("collection-count").textContent = "unknown";
+        document.getElementById("collections-body").innerHTML =
+          `<tr><td colspan="6">Collections unavailable: ${error.message}</td></tr>`;
+        document.getElementById("collection-sources-body").innerHTML =
+          `<tr><td colspan="5">Sources unavailable: ${error.message}</td></tr>`;
+      }
+    }
+
+    async function updateNumprocs() {
+      const status = document.getElementById("numprocs-status");
+      const input = document.getElementById("numprocs-input");
+      const save = document.getElementById("numprocs-save");
+      const value = Number.parseInt(input.value, 10);
+      const max = latestConfig.maxMapserverNumprocs || 32;
+
+      if (!Number.isInteger(value) || value < 1 || value > max) {
+        status.textContent = `must be 1-${max}`;
+        status.className = "bad";
+        return;
+      }
+
+      save.disabled = true;
+      status.textContent = "applying…";
+      status.className = "warn";
+      try {
+        const { response } = await timedFetch(numprocsUrl, {
+          timeoutMs: 20000,
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mapserverNumprocs: value }),
+        });
+        const result = await response.json();
+        if (!response.ok) {
+          throw new Error(result.error || `HTTP ${response.status}`);
+        }
+        status.textContent = `applied ${result.mapserverNumprocs}`;
+        status.className = "good";
+        await loadConfig();
+      } catch (error) {
+        status.textContent = error.message;
+        status.className = "bad";
+      } finally {
+        refreshDirtyState();
+      }
+    }
+
+    function runtimePayload() {
+      return {
+        gdalCacheMaxMb: Number.parseInt(document.getElementById("gdal-cachemax-input").value, 10),
+        vsiCacheSizeMb: Number.parseInt(document.getElementById("vsi-cache-input").value, 10),
+        imageryMinZoom: Number.parseInt(document.getElementById("imagery-min-zoom-input").value, 10),
+        mapserverDebug: document.getElementById("mapserver-debug-input").checked,
+        nginxCacheMaxSizeGb: Number.parseInt(document.getElementById("nginx-cache-max-size-input").value, 10),
+        nginxCacheTtl: getRadioValue("nginx-cache-ttl"),
+        nginxCache404Ttl: getRadioValue("nginx-cache-404-ttl"),
+      };
+    }
+
+    async function applyRuntimePayload() {
+      const { response } = await timedFetch(runtimeUrl, {
+        timeoutMs: 20000,
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(runtimePayload()),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || `HTTP ${response.status}`);
+      }
+      await loadConfig();
+      return result;
+    }
+
+    async function updateRuntime() {
+      const status = document.getElementById("runtime-status");
+      const save = document.getElementById("runtime-save");
+      save.disabled = true;
+      status.textContent = "applying…";
+      status.className = "warn";
+      try {
+        await applyRuntimePayload();
+        status.textContent = "applied; reload viewer for min zoom";
+        status.className = "good";
+      } catch (error) {
+        status.textContent = error.message;
+        status.className = "bad";
+      } finally {
+        refreshDirtyState();
+      }
+    }
+
+    async function refreshCacheStats() {
+      const refreshButton = document.getElementById("cache-refresh");
+      refreshButton.disabled = true;
+      refreshButton.textContent = "Refreshing…";
+      try {
+        const { response } = await timedFetch(nginxCacheUrl, { timeoutMs: 5000 });
+        const stats = await response.json();
+        if (!response.ok) {
+          throw new Error(stats.error || `HTTP ${response.status}`);
+        }
+        document.getElementById("nginx-cache-path").textContent = stats.path;
+        document.getElementById("nginx-cache-files").textContent = stats.files.toLocaleString();
+        document.getElementById("nginx-cache-size").textContent = `${stats.megabytes.toLocaleString()} MB`;
+        document.getElementById("nginx-cache-updated").textContent = new Date().toLocaleTimeString();
+      } catch (error) {
+        document.getElementById("nginx-cache-path").textContent = "unavailable";
+        document.getElementById("nginx-cache-files").textContent = "—";
+        document.getElementById("nginx-cache-size").textContent = error.message;
+        document.getElementById("nginx-cache-updated").textContent = "failed";
+      } finally {
+        refreshButton.disabled = false;
+        refreshButton.textContent = "Refresh";
+      }
+    }
+
+    async function updateCacheConfig() {
+      const status = document.getElementById("cache-config-status");
+      const save = document.getElementById("cache-config-save");
+      save.disabled = true;
+      status.textContent = "applying…";
+      status.className = "warn";
+      try {
+        await applyRuntimePayload();
+        status.textContent = "applied; nginx reloaded";
+        status.className = "good";
+        await refreshCacheStats();
+      } catch (error) {
+        status.textContent = error.message;
+        status.className = "bad";
+      } finally {
+        refreshDirtyState();
+      }
+    }
+
+
+
+    function selectTab(name) {
+      document.querySelectorAll(".tab-button").forEach((button) => {
+        const active = button.dataset.tab === name;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-selected", active ? "true" : "false");
+      });
+      document.querySelectorAll(".tab-panel").forEach((panel) => {
+        panel.classList.toggle("active", panel.id === `tab-${name}`);
+      });
+      if (name === "cache") refreshCacheStats();
+    }
+
+    document.getElementById("refresh").addEventListener("click", refresh);
+    document.getElementById("numprocs-save").addEventListener("click", updateNumprocs);
+    document.getElementById("runtime-save").addEventListener("click", updateRuntime);
+    document.getElementById("cache-refresh").addEventListener("click", refreshCacheStats);
+    document.getElementById("cache-config-save").addEventListener("click", updateCacheConfig);
+    [
+      "numprocs-input",
+      "gdal-cachemax-input",
+      "vsi-cache-input",
+      "imagery-min-zoom-input",
+      "mapserver-debug-input",
+      "nginx-cache-max-size-input",
+    ].forEach((id) => {
+      document.getElementById(id).addEventListener("input", refreshDirtyState);
+      document.getElementById(id).addEventListener("change", refreshDirtyState);
+    });
+    document.querySelectorAll('input[name="nginx-cache-ttl"], input[name="nginx-cache-404-ttl"]').forEach((input) => {
+      input.addEventListener("change", refreshDirtyState);
+    });
+    document.querySelectorAll(".tab-button").forEach((button) => {
+      button.addEventListener("click", () => selectTab(button.dataset.tab));
+    });
+    refreshLinks();
+    loadConfig();
+    loadCollections();
+    refreshCacheStats();
+    loadViewerConfig().finally(() => logLine([
+      `Origin: ${window.location.origin}`,
+      `WMS: ${capabilitiesUrl}`,
+      `Footprints: ${footprintUrl}`,
+      "",
+      "Click Refresh checks to run read-only health checks.",
+    ]));
+  </script>
+</body>
+</html>

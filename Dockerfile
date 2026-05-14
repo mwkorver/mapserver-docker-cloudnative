@@ -88,14 +88,17 @@ ADD etc /etc
 RUN ln -sf /etc/nginx/sites-available/mapserver_proxy.conf /etc/nginx/sites-enabled/default && \
     chmod +x /etc/entrypoint.sh && \
     chmod +x /etc/s3_sigv4_proxy.py && \
+    chmod +x /etc/admin_api.py && \
     mkdir -p /var/cache/nginx/cog && \
     chown -R www-data:www-data /var/cache/nginx
 COPY mapfiles /usr/src/mapfiles
 COPY viewer /usr/src/viewer
+COPY admin /usr/src/admin
 
 EXPOSE 80
 
 ENV MAPSERVER_CONFIG_FILE=/etc/mapserver/mapserver.conf
+ENV MAPSERVER_NUMPROCS=6
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD curl -sf "http://localhost/mapserv?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetCapabilities" || exit 1
