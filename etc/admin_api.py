@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
+import datetime as dt
 import json
 import os
 import re
 import subprocess
+import threading
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -12,6 +15,10 @@ ADMIN_CONFIG = Path("/usr/src/admin/config.json")
 RUNTIME_CONFIG = Path("/usr/src/admin/runtime_config.json")
 VIEWER_CONFIG = Path("/usr/src/viewer/config.json")
 MAPFILE = Path("/usr/src/mapfiles/mapfile.map")
+COLLECTIONS_FILE = Path("/usr/src/mapfiles/collections.json")
+MAPFILES_DIR = Path("/usr/src/mapfiles")
+SCAN_SCRIPT = Path("/usr/src/scripts/scan_cog_collection.py")
+MAPFILE_GENERATOR = Path("/etc/mapfile_generator.py")
 NGINX_CONF = Path("/etc/nginx/sites-available/mapserver_proxy.conf")
 NGINX_CACHE_CONF = Path("/etc/nginx/conf.d/cog_cache.conf")
 NGINX_CACHE = Path("/var/cache/nginx/cog")
@@ -388,6 +395,171 @@ def set_numprocs(value):
     }
 
 
+# ----------------------------------------------------------------------
+# COG scan jobs
+# ----------------------------------------------------------------------
+# Scans are spawned as subprocess threads; state lives in _JOBS guarded by
+# _JOBS_LOCK. State is in-memory (lost on container restart) — acceptable
+# for now since the artifacts (geojson + collections.json) are durable.
+
+_JOBS: dict[str, dict] = {}
+_JOBS_LOCK = threading.Lock()
+_COLLECTION_ID_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+_DISCOVERED_RE = re.compile(r"Discovered (\d+) GeoTIFFs")
+_PROGRESS_RE = re.compile(r"Scanned (\d+)/(\d+); failures=(\d+)")
+
+
+def now_iso():
+    return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def regenerate_mapfile():
+    """Re-run mapfile_generator with current env. Returns the captured stderr."""
+    result = subprocess.run(
+        ["python3", str(MAPFILE_GENERATOR)],
+        check=False, text=True, capture_output=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"mapfile_generator failed: {result.stderr or result.stdout}")
+    return result.stderr.strip() or result.stdout.strip()
+
+
+def _validate_scan_payload(payload):
+    required = {"collection_id", "bucket", "prefix"}
+    missing = required - set(payload)
+    if missing:
+        raise ValueError(f"missing required fields: {sorted(missing)}")
+    if not _COLLECTION_ID_RE.match(payload["collection_id"]):
+        raise ValueError("collection_id must be lowercase kebab-case: ^[a-z0-9]+(-[a-z0-9]+)*$")
+
+
+def start_scan(payload):
+    _validate_scan_payload(payload)
+    collection_id = payload["collection_id"]
+
+    with _JOBS_LOCK:
+        for existing in _JOBS.values():
+            if existing["status"] == "running" and existing["collection_id"] == collection_id:
+                raise ValueError(f"scan already running for {collection_id}")
+        job_id = uuid.uuid4().hex
+        job = {
+            "job_id": job_id,
+            "collection_id": collection_id,
+            "status": "running",
+            "discovered": None,
+            "scanned": 0,
+            "failures": 0,
+            "log_tail": [],
+            "started_at": now_iso(),
+            "completed_at": None,
+            "error_message": None,
+        }
+        _JOBS[job_id] = job
+
+    thread = threading.Thread(target=_run_scan, args=(job_id, payload), daemon=True)
+    thread.start()
+    return {"job_id": job_id, "status": "running"}
+
+
+def _set_job_failed(job, message):
+    with _JOBS_LOCK:
+        job["status"] = "failed"
+        job["error_message"] = message
+        job["completed_at"] = now_iso()
+
+
+def _run_scan(job_id, payload):
+    job = _JOBS[job_id]
+    collection_id = payload["collection_id"]
+    out_native = MAPFILES_DIR / f"{collection_id}_tileindex.geojson"
+    out_web = MAPFILES_DIR / f"{collection_id}_footprints_3857.geojson"
+
+    cmd = [
+        "python3", str(SCAN_SCRIPT),
+        "--bucket", payload["bucket"],
+        "--prefix", payload["prefix"],
+        "--region", payload.get("region", "us-west-2"),
+        "--collection", collection_id,
+        "--output-native", str(out_native),
+        "--output-web", str(out_web),
+        "--collections-file", str(COLLECTIONS_FILE),
+        "--label", payload.get("label", collection_id),
+        "--attribution", payload.get("attribution", ""),
+        "--layer-name", payload.get("layer_name", collection_id),
+        "--map-name", payload.get("map_name", f"{collection_id}-imagery"),
+        "--min-zoom", str(payload.get("min_zoom", 14)),
+        "--max-zoom", str(payload.get("max_zoom", 22)),
+        "--draw-order", str(payload.get("draw_order", 10)),
+        "--access-mode", payload.get("access_mode", "unsigned"),
+        "--enabled", "true" if payload.get("enabled", True) else "false",
+    ]
+    if payload.get("limit"):
+        cmd += ["--limit", str(int(payload["limit"]))]
+    if payload.get("workers"):
+        cmd += ["--workers", str(int(payload["workers"]))]
+    if payload.get("requester_pays"):
+        cmd.append("--requester-pays")
+
+    try:
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1,
+        )
+    except OSError as exc:
+        _set_job_failed(job, f"failed to spawn scanner: {exc}")
+        return
+
+    for line in proc.stdout:
+        line = line.rstrip()
+        with _JOBS_LOCK:
+            job["log_tail"].append(line)
+            if len(job["log_tail"]) > 100:
+                job["log_tail"] = job["log_tail"][-100:]
+            m = _DISCOVERED_RE.search(line)
+            if m:
+                job["discovered"] = int(m.group(1))
+            m = _PROGRESS_RE.search(line)
+            if m:
+                job["scanned"] = int(m.group(1))
+                job["failures"] = int(m.group(3))
+
+    rc = proc.wait()
+    if rc != 0:
+        _set_job_failed(job, f"scanner exited with code {rc}")
+        return
+
+    try:
+        gen_output = regenerate_mapfile()
+        with _JOBS_LOCK:
+            job["log_tail"].append(f"mapfile_generator: {gen_output}")
+    except Exception as exc:
+        _set_job_failed(job, f"mapfile regeneration failed: {exc}")
+        return
+
+    try:
+        restart_result = restart_mapserver_group()
+        with _JOBS_LOCK:
+            job["log_tail"].append(f"mapserver restart: {restart_result}")
+    except Exception as exc:
+        _set_job_failed(job, f"mapserver restart failed: {exc}")
+        return
+
+    with _JOBS_LOCK:
+        job["status"] = "complete"
+        job["completed_at"] = now_iso()
+
+
+def get_job(job_id):
+    with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+        return dict(job) if job else None
+
+
+def list_jobs():
+    with _JOBS_LOCK:
+        return {"jobs": [dict(j) for j in _JOBS.values()]}
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/config":
@@ -411,6 +583,34 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/collections":
             try:
                 write_json(self, 200, collections_config())
+            except Exception as exc:
+                write_error(self, 500, str(exc))
+            return
+        if self.path == "/jobs":
+            write_json(self, 200, list_jobs())
+            return
+        if self.path.startswith("/jobs/"):
+            job_id = self.path[len("/jobs/"):]
+            job = get_job(job_id)
+            if job is None:
+                write_error(self, 404, "job not found")
+                return
+            write_json(self, 200, job)
+            return
+        write_error(self, 404, "not found")
+
+    def do_POST(self):
+        if self.path == "/collections/scan":
+            if not write_enabled():
+                write_error(self, 403, "admin writes are disabled")
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(length) or b"{}")
+                result = start_scan(payload)
+                write_json(self, 202, result)
+            except ValueError as exc:
+                write_error(self, 400, str(exc))
             except Exception as exc:
                 write_error(self, 500, str(exc))
             return

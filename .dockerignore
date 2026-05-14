@@ -24,7 +24,9 @@ cdk.out/
 !mapfiles/ky_20x20_tileindex_3089.geojson
 
 # Tooling
-scripts/
+# scripts/ ships into the container so admin_api can invoke
+# scan_cog_collection.py for runtime bucket scans.
+# scripts/
 iam/
 
 # Python

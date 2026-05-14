@@ -95,6 +95,7 @@ RUN ln -sf /etc/nginx/sites-available/mapserver_proxy.conf /etc/nginx/sites-enab
 COPY mapfiles /usr/src/mapfiles
 COPY viewer /usr/src/viewer
 COPY admin /usr/src/admin
+COPY scripts /usr/src/scripts
 
 EXPOSE 80
 
