@@ -25,13 +25,18 @@ test.describe("admin dashboard", () => {
   test("renders seeded collection sources", async ({ page }) => {
     await expect(page.getByRole("tab", { name: "Collections" })).toHaveAttribute("aria-selected", "true");
     await expect(page.locator("#collection-count")).toHaveText("3");
-    await expect(page.locator("#collections-body").getByText("ky-2024-3in")).toBeVisible();
-    await expect(page.locator("#collections-body").getByText("nj-2020-1ft")).toBeVisible();
-    await expect(page.locator("#collections-body").getByText("naip-ca-2022-rgb")).toBeVisible();
-    await expect(page.locator("#collection-sources-body").getByText("kyfromabove", { exact: true })).toBeVisible();
-    await expect(page.locator("#collection-sources-body").getByText("njogis-imagery", { exact: true })).toBeVisible();
-    await expect(page.locator("#collection-sources-body").getByText("naip-visualization", { exact: true })).toBeVisible();
-    await expect(page.locator("#collection-sources-body").getByText("requester-pays (requester pays)", { exact: true })).toBeVisible();
+    await expect(page.locator("#collections-body").getByRole("cell", { name: "ky-2024-3in", exact: true }).first()).toBeVisible();
+    await expect(page.locator("#collections-body").getByRole("cell", { name: "nj-2020-1ft", exact: true }).first()).toBeVisible();
+    await expect(page.locator("#collections-body").getByRole("cell", { name: "ky-2024-season13in", exact: true }).first()).toBeVisible();
+    await expect(page.locator("#collection-sources-body").getByRole("cell", { name: "kyfromabove", exact: true }).first()).toBeVisible();
+    await expect(page.locator("#collection-sources-body").getByRole("cell", { name: "njogis-imagery", exact: true }).first()).toBeVisible();
+  });
+
+  test("can switch active collection for visualization", async ({ page }) => {
+    await page.locator("#collections-body button", { hasText: "View" }).first().click();
+    await expect(page.getByRole("tab", { name: "Visualize" })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByText("The admin dashboard does not embed the map viewer")).toBeVisible();
+    await expect(page.locator("#viewer-full-link")).toHaveAttribute("href", /\/viewer\//);
   });
 
   test("refreshes cache stats with visible feedback", async ({ page }) => {

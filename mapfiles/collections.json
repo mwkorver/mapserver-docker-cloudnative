@@ -20,9 +20,24 @@
       },
       "native_epsg": 3089,
       "cog_count": 400,
-      "bbox_4326": [-85.5063, 37.8079, -85.2515, 38.0876],
-      "extent_3857": [-9523010, 4551082, -9484253, 4590002],
-      "extent_native": [4980000, 3815000, 5080000, 3915000],
+      "bbox_4326": [
+        -85.5063,
+        37.8079,
+        -85.2515,
+        38.0876
+      ],
+      "extent_3857": [
+        -9523010,
+        4551082,
+        -9484253,
+        4590002
+      ],
+      "extent_native": [
+        4980000,
+        3815000,
+        5080000,
+        3915000
+      ],
       "tileindex_geojson": "/usr/src/mapfiles/ky_20x20_tileindex_3089.geojson",
       "footprints_geojson": "/usr/src/mapfiles/ky_20x20_tileindex.geojson",
       "postgis": false,
@@ -47,13 +62,70 @@
       },
       "native_epsg": 6527,
       "cog_count": 9202,
-      "bbox_4326": [-75.5594, 38.8718, -73.8868, 41.3577],
-      "extent_3857": [-8412731, 4709462, -8223562, 5067461],
-      "extent_native": [190000, 30000, 665000, 925000],
+      "bbox_4326": [
+        -75.5594,
+        38.8718,
+        -73.8868,
+        41.3577
+      ],
+      "extent_3857": [
+        -8412731,
+        4709462,
+        -8223562,
+        5067461
+      ],
+      "extent_native": [
+        190000,
+        30000,
+        665000,
+        925000
+      ],
       "tileindex_geojson": "/usr/src/mapfiles/nj_2020_tileindex_6527.geojson",
       "footprints_geojson": "/usr/src/mapfiles/nj_2020_footprints_3857.geojson",
       "postgis": false,
       "indexed_at": "2026-05-12T00:00:00Z"
+    },
+    {
+      "id": "ky-2024-season13in",
+      "layer_name": "ky-2024-season13in",
+      "map_name": "ky-2024-season13in-imagery",
+      "label": "ky-2024-season13in",
+      "attribution": "",
+      "enabled": true,
+      "min_zoom": 16,
+      "max_zoom": 22,
+      "draw_order": 10,
+      "source": {
+        "bucket": "kyfromabove",
+        "prefix": "imagery/orthos/Phase3/KY_KYAPED_2024_Season1_3IN/",
+        "region": "us-west-2",
+        "access_mode": "unsigned",
+        "requester_pays": false
+      },
+      "native_epsg": 3089,
+      "cog_count": 24395,
+      "bbox_4326": [
+        -89.5855,
+        36.4831,
+        -83.1167,
+        39.1557
+      ],
+      "extent_3857": [
+        -9972617,
+        4367307,
+        -9252507,
+        4743995
+      ],
+      "extent_native": [
+        3795000.0,
+        3345000.0,
+        5680000.0,
+        4310000.0
+      ],
+      "tileindex_geojson": "/usr/src/mapfiles/ky-2024-season13in_tileindex.geojson",
+      "footprints_geojson": "/usr/src/mapfiles/ky-2024-season13in_footprints_3857.geojson",
+      "postgis": false,
+      "indexed_at": "2026-05-14T18:26:49Z"
     }
   ]
 }

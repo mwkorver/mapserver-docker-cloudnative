@@ -7,3 +7,15 @@ test-results/
 playwright-report/
 cdk/.home/
 cdk/outputs.json
+
+# Scanner-produced geojson outputs from the admin UI's "Add a collection"
+# flow. collections.json is the source of truth; re-running the scanner
+# regenerates these files. To intentionally ship a scanned collection in
+# the repo, `git add -f mapfiles/<filename>`.
+mapfiles/*_footprints_3857.geojson
+mapfiles/*_tileindex.geojson
+
+# Bundled sample tile indexes — keep tracked.
+!mapfiles/nj_2020_footprints_3857.geojson
+!mapfiles/nj_2020_sample_footprints_3857.geojson
+!mapfiles/ky_20x20_tileindex.geojson
