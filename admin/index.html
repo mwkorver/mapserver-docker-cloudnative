@@ -343,12 +343,13 @@
     .tab-panel { display: none; }
     .tab-panel.active { display: block; }
 
-    .viewer-frame {
-      width: 100%;
-      height: 620px;
+    .viewer-placeholder {
       border: 1px solid var(--border);
       border-radius: 10px;
-      background: white;
+      background: #f8fafc;
+      color: var(--muted);
+      padding: 18px;
+      line-height: 1.5;
     }
 
   </style>
@@ -386,14 +387,16 @@
                 <tr>
                   <th>Collection</th>
                   <th>WMS layer</th>
+                  <th>Active</th>
                   <th>Enabled</th>
                   <th>Zoom</th>
                   <th>Sources</th>
                   <th>Status</th>
+                  <th>Action</th>
                 </tr>
               </thead>
               <tbody id="collections-body">
-                <tr><td colspan="6">Loading collections…</td></tr>
+                <tr><td colspan="8">Loading collections…</td></tr>
               </tbody>
             </table>
           </div>
@@ -730,10 +733,14 @@
         <div class="panel">
           <h2>Map Preview</h2>
           <div class="metric">
-            <span>Embedded viewer</span>
+            <span>Viewer</span>
             <span><a id="viewer-full-link" href="/viewer/" target="_blank" rel="noopener">open full viewer</a></span>
           </div>
-          <iframe id="viewer-frame" class="viewer-frame" src="/viewer/" title="Map preview"></iframe>
+          <div class="viewer-placeholder">
+            The admin dashboard does not embed the map viewer. Large footprint
+            collections can make embedded maps expensive in the in-app browser.
+            Use the full viewer link after selecting a collection.
+          </div>
         </div>
 
         <div class="panel">
@@ -798,6 +805,7 @@
     const runtimeUrl = `${window.location.origin}/admin/api/runtime`;
     const nginxCacheUrl = `${window.location.origin}/admin/api/nginx-cache`;
     const collectionsUrl = `${window.location.origin}/admin/api/collections`;
+    const activeCollectionUrl = `${window.location.origin}/admin/api/collections/active`;
 
     document.getElementById("wms-url").textContent = wmsUrl;
     let latestConfig = {};
@@ -861,7 +869,6 @@
       const viewerUrl = `${window.location.origin}/viewer/`;
       setLink("viewer-link", viewerUrl, "open");
       setLink("viewer-full-link", viewerUrl, "open full viewer");
-      document.getElementById("viewer-frame").src = viewerUrl;
       setLink("mapserv-link", wmsUrl, wmsUrl);
       setLink("capabilities-link", capabilitiesUrl, "open");
       setLink("footprints-link", footprintUrl, new URL(footprintUrl).pathname);
@@ -1039,19 +1046,30 @@
       document.getElementById("collection-count").textContent = collections.length.toLocaleString();
 
       if (collections.length === 0) {
-        collectionsBody.innerHTML = '<tr><td colspan="6">No collections configured.</td></tr>';
+        collectionsBody.innerHTML = '<tr><td colspan="8">No collections configured.</td></tr>';
         sourcesBody.innerHTML = '<tr><td colspan="5">No sources configured.</td></tr>';
         return;
       }
 
       collections.forEach((collection) => {
+        const isActive = collection.collectionName === payload.activeCollection;
         const row = document.createElement("tr");
         appendCell(row, collection.collectionName);
         appendCell(row, collection.layerName);
+        appendCell(row, isActive ? "yes" : "no");
         appendCell(row, collection.enabled ? "yes" : "no");
         appendCell(row, `${collection.minZoom ?? "—"}-${collection.maxZoom ?? "—"}`);
         appendCell(row, Array.isArray(collection.sources) ? collection.sources.length.toLocaleString() : "0");
         appendCell(row, collection.status);
+        const actionCell = document.createElement("td");
+        const actionButton = document.createElement("button");
+        actionButton.type = "button";
+        actionButton.textContent = isActive ? "Active" : (collection.enabled ? "View" : "Disabled");
+        actionButton.disabled = isActive || !collection.enabled || !latestConfig.writeEnabled;
+        actionButton.dataset.collectionName = collection.collectionName;
+        actionButton.addEventListener("click", () => activateCollection(collection.collectionName));
+        actionCell.appendChild(actionButton);
+        row.appendChild(actionCell);
         collectionsBody.appendChild(row);
 
         (collection.sources || []).forEach((source) => {
@@ -1076,9 +1094,36 @@
       } catch (error) {
         document.getElementById("collection-count").textContent = "unknown";
         document.getElementById("collections-body").innerHTML =
-          `<tr><td colspan="6">Collections unavailable: ${error.message}</td></tr>`;
+          `<tr><td colspan="8">Collections unavailable: ${error.message}</td></tr>`;
         document.getElementById("collection-sources-body").innerHTML =
           `<tr><td colspan="5">Sources unavailable: ${error.message}</td></tr>`;
+      }
+    }
+
+    async function activateCollection(collectionName) {
+      try {
+        const { response } = await timedFetch(activeCollectionUrl, {
+          timeoutMs: 10000,
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ activeCollection: collectionName }),
+        });
+        const result = await response.json();
+        if (!response.ok) {
+          throw new Error(result.error || `HTTP ${response.status}`);
+        }
+        renderCollections(result);
+        await loadViewerConfig();
+        selectTab("visualize");
+        logLine([
+          `Active collection: ${collectionName}`,
+          `Viewer config: ${viewerConfigUrl}`,
+          `Footprints: ${footprintUrl}`,
+          "",
+          "Open the full viewer from the Visualize tab to inspect the selected collection.",
+        ]);
+      } catch (error) {
+        logLine([`Active collection update failed: ${error.message}`]);
       }
     }
 
@@ -1421,8 +1466,10 @@
     });
     scanForm.addEventListener("submit", submitScan);
     refreshLinks();
-    loadConfig().then(() => setScanFormEnabled(Boolean(latestConfig.writeEnabled)));
-    loadCollections();
+    loadConfig().then(() => {
+      setScanFormEnabled(Boolean(latestConfig.writeEnabled));
+      return loadCollections();
+    });
     refreshCacheStats();
     refreshJobs();
     loadViewerConfig().finally(() => logLine([

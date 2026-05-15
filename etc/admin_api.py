@@ -8,6 +8,7 @@ import threading
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 
 SUPERVISOR_CONF = Path("/etc/supervisor/conf.d/supervisord.conf")
@@ -24,6 +25,7 @@ NGINX_CACHE_CONF = Path("/etc/nginx/conf.d/cog_cache.conf")
 NGINX_CACHE = Path("/var/cache/nginx/cog")
 MAX_WORKERS = int(os.environ.get("MAPSERVER_MAX_NUMPROCS", "32"))
 DEFAULT_RUNTIME = {
+    "activeCollection": "",
     "gdalCacheMaxMb": 128,
     "vsiCacheSizeMb": 32,
     "mapserverDebug": False,
@@ -52,6 +54,9 @@ FALLBACK_VIEWER_CONFIG = {
     "imageryMinZoom": 14,
     "attribution": "",
 }
+FOOTPRINT_LIMIT_DEFAULT = 2000
+FOOTPRINT_LIMIT_MAX = 10000
+_FOOTPRINT_CACHE: dict[str, dict] = {}
 
 
 def _read_collections():
@@ -156,10 +161,106 @@ def _collection_to_viewer(collection):
         "mapName": collection.get("map_name") or "imagery",
         "layerName": collection.get("layer_name") or collection.get("id"),
         "footprintUrl": _public_footprint_url(collection),
+        "footprintApiUrl": "/viewer/footprints",
         "bounds": _bounds_from_bbox_4326(bbox) or FALLBACK_VIEWER_CONFIG["bounds"],
         "center": _center_from_bbox_4326(bbox) or FALLBACK_VIEWER_CONFIG["center"],
         "imageryMinZoom": collection.get("min_zoom") or 14,
         "attribution": collection.get("attribution", ""),
+    }
+
+
+def _flatten_coordinates(coords, points):
+    if not isinstance(coords, list):
+        return points
+    if len(coords) >= 2 and isinstance(coords[0], (int, float)) and isinstance(coords[1], (int, float)):
+        points.append((float(coords[0]), float(coords[1])))
+        return points
+    for child in coords:
+        _flatten_coordinates(child, points)
+    return points
+
+
+def _feature_bbox(feature):
+    points = _flatten_coordinates((feature.get("geometry") or {}).get("coordinates"), [])
+    if not points:
+        return None
+    xs = [point[0] for point in points]
+    ys = [point[1] for point in points]
+    return [min(xs), min(ys), max(xs), max(ys)]
+
+
+def _bbox_intersects(a, b):
+    return bool(a and b and a[0] <= b[2] and a[2] >= b[0] and a[1] <= b[3] and a[3] >= b[1])
+
+
+def _load_footprints(collection):
+    path = Path(collection.get("footprints_geojson") or "")
+    if not path.exists():
+        raise FileNotFoundError(f"footprints file not found: {path}")
+    cache_key = str(path)
+    stat = path.stat()
+    cached = _FOOTPRINT_CACHE.get(cache_key)
+    if cached and cached.get("mtime") == stat.st_mtime and cached.get("size") == stat.st_size:
+        return cached
+
+    data = json.loads(path.read_text())
+    features = data.get("features") or []
+    indexed_features = []
+    for feature in features:
+        indexed_features.append({"feature": feature, "bbox": _feature_bbox(feature)})
+    cached = {
+        "mtime": stat.st_mtime,
+        "size": stat.st_size,
+        "crs": data.get("crs"),
+        "total": len(features),
+        "features": indexed_features,
+    }
+    _FOOTPRINT_CACHE[cache_key] = cached
+    return cached
+
+
+def footprints_for_active_collection(query):
+    doc = _read_collections()
+    active = _active_collection(doc.get("collections", []))
+    if active is None:
+        return {"type": "FeatureCollection", "features": []}
+
+    params = parse_qs(query)
+    bbox_values = params.get("bbox", [""])[0].split(",")
+    if len(bbox_values) != 4:
+        raise ValueError("bbox query parameter is required as minx,miny,maxx,maxy")
+    try:
+        bbox = [float(value) for value in bbox_values]
+    except ValueError as exc:
+        raise ValueError("bbox values must be numbers") from exc
+
+    try:
+        limit = int(params.get("limit", [str(FOOTPRINT_LIMIT_DEFAULT)])[0])
+    except ValueError as exc:
+        raise ValueError("limit must be an integer") from exc
+    limit = max(1, min(limit, FOOTPRINT_LIMIT_MAX))
+
+    cached = _load_footprints(active)
+    matches = []
+    matched_count = 0
+    for item in cached["features"]:
+        if _bbox_intersects(item["bbox"], bbox):
+            matched_count += 1
+            if len(matches) < limit:
+                matches.append(item["feature"])
+
+    return {
+        "type": "FeatureCollection",
+        "crs": cached.get("crs"),
+        "features": matches,
+        "properties": {
+            "collection": active.get("id"),
+            "matched": matched_count,
+            "returned": len(matches),
+            "total": cached["total"],
+            "limit": limit,
+            "truncated": matched_count > len(matches),
+        },
     }
 
 
@@ -203,6 +304,7 @@ def runtime_config():
 def validate_runtime(config):
     result = dict(DEFAULT_RUNTIME)
     result.update(config)
+    result["activeCollection"] = str(result.get("activeCollection") or "").strip()
     result["gdalCacheMaxMb"] = int(result["gdalCacheMaxMb"])
     result["vsiCacheSizeMb"] = int(result["vsiCacheSizeMb"])
     result["imageryMinZoom"] = int(result["imageryMinZoom"])
@@ -245,7 +347,16 @@ def validate_nginx_ttl(value, name):
 def save_runtime_config(config):
     config = validate_runtime(config)
     RUNTIME_CONFIG.write_text(json.dumps(config, indent=2) + "\n")
-    VIEWER_CONFIG.write_text(json.dumps({"imageryMinZoom": config["imageryMinZoom"]}, indent=2) + "\n")
+    VIEWER_CONFIG.write_text(
+        json.dumps(
+            {
+                "activeCollection": config["activeCollection"],
+                "imageryMinZoom": config["imageryMinZoom"],
+            },
+            indent=2,
+        )
+        + "\n"
+    )
     return config
 
 
@@ -372,21 +483,34 @@ def admin_config():
     return config
 
 
-def _active_collection(collections):
+def _collection_by_id(collections, collection_id):
+    if not collection_id:
+        return None
+    for collection in collections:
+        if collection.get("id") == collection_id:
+            return collection
+    return None
+
+
+def _active_collection(collections, runtime=None):
     """Pick the active (default) collection.
 
     Resolution order:
-      1. $LOCAL_COLLECTION env var if it matches an entry's id
-      2. First enabled collection in draw_order order
-      3. First collection at all
+      1. runtime_config.activeCollection if it matches an entry's id
+      2. $LOCAL_COLLECTION env var if it matches an entry's id
+      3. First enabled collection in draw_order order
+      4. First collection at all
     """
     if not collections:
         return None
+    runtime = runtime if runtime is not None else runtime_config()
+    configured = _collection_by_id(collections, runtime.get("activeCollection"))
+    if configured:
+        return configured
     explicit = os.environ.get("LOCAL_COLLECTION")
-    if explicit:
-        for c in collections:
-            if c.get("id") == explicit:
-                return c
+    explicit_match = _collection_by_id(collections, explicit)
+    if explicit_match:
+        return explicit_match
     enabled = [c for c in collections if c.get("enabled", True)]
     enabled.sort(key=lambda c: c.get("draw_order", 10))
     if enabled:
@@ -432,6 +556,21 @@ def viewer_config():
     if "imageryMinZoom" in runtime and runtime["imageryMinZoom"]:
         config["imageryMinZoom"] = runtime["imageryMinZoom"]
     return config
+
+
+def set_active_collection(collection_id):
+    collections = _read_collections().get("collections", [])
+    selected = _collection_by_id(collections, collection_id)
+    if selected is None:
+        raise ValueError(f"unknown collection: {collection_id}")
+    current = runtime_config()
+    current["activeCollection"] = collection_id
+    config = save_runtime_config(current)
+    return {
+        "activeCollection": collection_id,
+        "viewer": _collection_to_viewer(selected),
+        **config,
+    }
 
 
 def set_numprocs(value):
@@ -642,35 +781,45 @@ def list_jobs():
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path == "/config":
+        parsed = urlparse(self.path)
+        path = parsed.path
+        if path == "/config":
             try:
                 write_json(self, 200, admin_config())
             except Exception as exc:
                 write_error(self, 500, str(exc))
             return
-        if self.path == "/viewer-config":
+        if path == "/viewer-config":
             try:
                 write_json(self, 200, viewer_config())
             except Exception as exc:
                 write_error(self, 500, str(exc))
             return
-        if self.path == "/nginx-cache":
+        if path == "/viewer-footprints":
+            try:
+                write_json(self, 200, footprints_for_active_collection(parsed.query))
+            except ValueError as exc:
+                write_error(self, 400, str(exc))
+            except Exception as exc:
+                write_error(self, 500, str(exc))
+            return
+        if path == "/nginx-cache":
             try:
                 write_json(self, 200, nginx_cache_stats())
             except Exception as exc:
                 write_error(self, 500, str(exc))
             return
-        if self.path == "/collections":
+        if path == "/collections":
             try:
                 write_json(self, 200, collections_config())
             except Exception as exc:
                 write_error(self, 500, str(exc))
             return
-        if self.path == "/jobs":
+        if path == "/jobs":
             write_json(self, 200, list_jobs())
             return
-        if self.path.startswith("/jobs/"):
-            job_id = self.path[len("/jobs/"):]
+        if path.startswith("/jobs/"):
+            job_id = path[len("/jobs/"):]
             job = get_job(job_id)
             if job is None:
                 write_error(self, 404, "job not found")
@@ -697,10 +846,13 @@ class Handler(BaseHTTPRequestHandler):
         write_error(self, 404, "not found")
 
     def do_PUT(self):
+        if self.path == "/runtime":
+            self.update_runtime()
+            return
+        if self.path == "/collections/active":
+            self.update_active_collection()
+            return
         if self.path != "/numprocs":
-            if self.path == "/runtime":
-                self.update_runtime()
-                return
             write_error(self, 404, "not found")
             return
         if not write_enabled():
@@ -711,6 +863,23 @@ class Handler(BaseHTTPRequestHandler):
             payload = json.loads(self.rfile.read(length) or b"{}")
             result = set_numprocs(payload.get("mapserverNumprocs"))
             write_json(self, 200, {**admin_config(), **result})
+        except ValueError as exc:
+            write_error(self, 400, str(exc))
+        except Exception as exc:
+            write_error(self, 500, str(exc))
+
+    def update_active_collection(self):
+        if not write_enabled():
+            write_error(self, 403, "admin writes are disabled")
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(length) or b"{}")
+            collection_id = payload.get("activeCollection")
+            if not isinstance(collection_id, str) or not collection_id.strip():
+                raise ValueError("activeCollection is required")
+            result = set_active_collection(collection_id.strip())
+            write_json(self, 200, {**collections_config(), **result})
         except ValueError as exc:
             write_error(self, 400, str(exc))
         except Exception as exc:
