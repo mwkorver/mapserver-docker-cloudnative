@@ -847,6 +847,7 @@
                 <th>Time</th>
                 <th>Workers</th>
                 <th>GDAL Cache</th>
+                <th>VSI Cache</th>
                 <th>Zoom</th>
                 <th>Cleared</th>
                 <th>Concurrency</th>
@@ -1620,11 +1621,13 @@
         const timeStr = new Date().toLocaleTimeString();
         const workers = latestConfig.mapserverNumprocs;
         const gdal = latestConfig.gdalCacheMaxMb;
+        const vsi = latestConfig.vsiCacheSizeMb;
         
         tr.innerHTML = `
           <td>${timeStr}</td>
           <td>${workers}</td>
           <td>${gdal} MB</td>
+          <td>${vsi} MB</td>
           <td>${payload.zoom}</td>
           <td>${payload.clear_cache ? "Yes" : "No"}</td>
           <td>${data.concurrency}</td>

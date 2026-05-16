@@ -18,7 +18,7 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 from urllib.request import Request, urlopen
 
 
@@ -54,6 +54,25 @@ def _metadata_token():
 
 
 def _load_credentials():
+    if os.path.exists("/tmp/aws_credentials.json"):
+        try:
+            with open("/tmp/aws_credentials.json", encoding="utf-8") as f:
+                data = json.load(f)
+            expires_at = 0
+            expiration = data.get("Expiration")
+            if expiration:
+                expires_at = dt.datetime.fromisoformat(expiration.replace("Z", "+00:00")).timestamp()
+            
+            # The proxy auto-reloads 300 seconds before expires_at
+            return {
+                "access_key": data["AccessKeyId"],
+                "secret_key": data["SecretAccessKey"],
+                "token": data.get("SessionToken"),
+                "expires_at": expires_at,
+            }
+        except Exception as exc:
+            print(f"s3-sigv4-proxy: failed to load /tmp/aws_credentials.json: {exc}", file=sys.stderr, flush=True)
+
     access_key = os.environ.get("AWS_ACCESS_KEY_ID")
     secret_key = os.environ.get("AWS_SECRET_ACCESS_KEY")
     token = os.environ.get("AWS_SESSION_TOKEN")
@@ -146,7 +165,7 @@ def _canonical_query(query):
     pairs = []
     for part in query.split("&"):
         key, _, value = part.partition("=")
-        pairs.append((quote(key, safe="-_.~"), quote(value, safe="-_.~")))
+        pairs.append((quote(unquote(key), safe="-_.~"), quote(unquote(value), safe="-_.~")))
     return "&".join(f"{key}={value}" for key, value in sorted(pairs))
 
 
@@ -154,7 +173,7 @@ def _canonical_uri(path):
     return "/" + "/".join(quote(segment, safe="-_.~") for segment in path.lstrip("/").split("/"))
 
 
-def signed_headers(method, path, query, range_header):
+def signed_headers(method, path, query, range_header, extra_headers=None):
     creds = credentials()
     host = f"{S3_BUCKET}.s3.{S3_REGION}.amazonaws.com"
     headers = {
@@ -163,6 +182,8 @@ def signed_headers(method, path, query, range_header):
     }
     if range_header:
         headers["range"] = range_header
+    if extra_headers:
+        headers.update(extra_headers)
 
     if not creds:
         return {header.title(): value for header, value in headers.items()}
@@ -222,17 +243,39 @@ class S3ProxyHandler(BaseHTTPRequestHandler):
         self._proxy()
 
     def _proxy(self):
+        global S3_BUCKET, S3_REGION
         parsed = urlsplit(self.path)
+        
+        parts = parsed.path.lstrip("/").split("/", 3)
+        if len(parts) >= 4 and parts[0] in ("requester-pays", "standard"):
+            req_pays_flag, target_region, target_bucket, upstream_path = parts
+            upstream_path = "/" + upstream_path
+            is_requester_pays = req_pays_flag == "requester-pays"
+        else:
+            target_region = S3_REGION
+            target_bucket = S3_BUCKET
+            upstream_path = parsed.path
+            is_requester_pays = False
+
         range_header = self.headers.get("Range")
-        headers = signed_headers(self.command, parsed.path, parsed.query, range_header)
+        extra = {"x-amz-request-payer": "requester"} if is_requester_pays else None
+        
+        orig_bucket, orig_region = S3_BUCKET, S3_REGION
+        S3_BUCKET, S3_REGION = target_bucket, target_region
+        
+        try:
+            headers = signed_headers(self.command, upstream_path, parsed.query, range_header, extra)
+        finally:
+            S3_BUCKET, S3_REGION = orig_bucket, orig_region
+
         connection = http.client.HTTPSConnection(
-            f"{S3_BUCKET}.s3.{S3_REGION}.amazonaws.com",
+            f"{target_bucket}.s3.{target_region}.amazonaws.com",
             timeout=30,
         )
-        upstream_path = parsed.path + (f"?{parsed.query}" if parsed.query else "")
+        upstream_url = upstream_path + (f"?{parsed.query}" if parsed.query else "")
 
         try:
-            connection.request(self.command, upstream_path, headers=headers)
+            connection.request(self.command, upstream_url, headers=headers)
             response = connection.getresponse()
             self.send_response_only(response.status, response.reason)
             for name, value in response.getheaders():
