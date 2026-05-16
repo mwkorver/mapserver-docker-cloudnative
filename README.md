@@ -10,10 +10,10 @@ A cloud-native MapServer deployment for serving Cloud Optimized GeoTIFFs (COGs) 
 
 ## How it works
 
-1. **Build a VRT mosaic once** — `scripts/build_vrt.py` reads COG headers in parallel from S3 and produces a single VRT XML file referencing all tiles.
-2. **Store the VRT in S3** — upload it to your private bucket.
-3. **Container downloads VRT at startup** — set `VRT_S3_URI` and the entrypoint fetches it before MapServer starts.
-4. **MapServer serves WMS** — GDAL reads COG tiles on demand via `/vsis3/` range requests, using a 256 MB in-process cache.
+1. **Deploy the stack** — Use AWS CDK to deploy the Fargate container, or run the Docker image locally.
+2. **Access the Admin UI** — Navigate to `/admin/` in your browser.
+3. **Scan an S3 Bucket** — Enter an S3 bucket and prefix containing COGs. The internal `scan_cog_collection.py` script automatically scans the bucket, calculates spatial extents, and generates GeoJSON TileIndexes.
+4. **MapServer serves WMS** — MapServer natively reads the generated GeoJSON TileIndex and proxies `/vsicurl/` range requests through an internal Nginx byte-range cache to serve ultra-fast WMS tiles.
 
 ---
 
@@ -21,27 +21,13 @@ A cloud-native MapServer deployment for serving Cloud Optimized GeoTIFFs (COGs) 
 
 ### Prerequisites
 
-- Docker Desktop
-- AWS credentials with read access to the COG bucket and read/write to your VRT bucket
+- A local container engine. *Note: Must support `buildx` for `linux/arm64` cross-compilation.*
+  - **macOS:** This project was built and tested locally using [Colima](https://github.com/abiosoft/colima).
+  - **Windows:** We recommend [Rancher Desktop](https://rancherdesktop.io/) or [Podman Desktop](https://podman-desktop.io/).
+  - **Linux:** Native Docker CE or Podman.
+- AWS credentials with read access to the COG bucket.
 
-### 1. Build the VRT
-
-```bash
-eval $(aws configure export-credentials --format env)
-
-docker run --rm --platform linux/arm64 \
-  -e AWS_ACCESS_KEY_ID \
-  -e AWS_SECRET_ACCESS_KEY \
-  -e AWS_SESSION_TOKEN \
-  -v $(pwd)/data:/output \
-  <your-image> python3 /scripts/build_vrt.py
-
-aws s3 cp data/auckland_2024.vrt s3://<your-bucket>/auckland_2024.vrt
-```
-
-Edit `BUCKET`, `PREFIX`, and `OUTPUT` at the top of `scripts/build_vrt.py` to point at your data.
-
-### 2. Run the container
+### 1. Run the container
 
 ```bash
 eval $(aws configure export-credentials --format env)
@@ -50,28 +36,24 @@ docker run --rm \
   -e AWS_ACCESS_KEY_ID \
   -e AWS_SECRET_ACCESS_KEY \
   -e AWS_SESSION_TOKEN \
-  -e VRT_S3_URI=s3://<your-bucket>/auckland_2024.vrt \
   -p 8080:80 \
   <your-image>
 ```
 
-### 3. Test WMS
+### 2. Configure via Admin UI
 
-GetCapabilities:
-```
-http://localhost:8080/mapserv?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetCapabilities
-```
+1. Open `http://localhost:8080/admin/` in your browser.
+2. Go to the **Collections** tab.
+3. Enter your S3 bucket and prefix (e.g. `my-bucket` and `imagery/2024/`).
+4. Click **Start Scan**. The backend will automatically generate the required TileIndexes and reload MapServer.
 
-GetMap (Auckland 2024, EPSG:2193):
-```
-http://localhost:8080/mapserv?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=auckland-2024&CRS=EPSG:2193&BBOX=5920000,1750000,5930000,1760000&WIDTH=256&HEIGHT=256&FORMAT=image/png
-```
+### 3. Test WMS & Viewer
 
-> **WMS 1.3.0 axis order:** EPSG:2193 (NZTM) uses Northing,Easting order — BBOX is `minN,minE,maxN,maxE`.
-
-### 4. Open the viewer
-
-Open `viewer/index.html` in your browser. It loads a Leaflet map with the WMS layer pre-configured for `http://localhost:8080/mapserv`. The URL can be changed in the toolbar to point at any deployed instance.
+- **Viewer**: Once the scan is complete, click the **Viewer** tab in the Admin UI to see an interactive Leaflet map of your data.
+- **WMS GetCapabilities**:
+  ```
+  http://localhost:8080/mapserv?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetCapabilities
+  ```
 
 ---
 

@@ -19,9 +19,11 @@ data/
 cdk/
 cdk.out/
 *.gpkg
+# Ship every .geojson under mapfiles/ — these are the tile indexes the
+# mapfile_generator references at runtime. We DO want the bundled samples,
+# the NJ tile indexes, and any locally-scanned outputs to land in the image.
 *.geojson
-!mapfiles/ky_20x20_tileindex.geojson
-!mapfiles/ky_20x20_tileindex_3089.geojson
+!mapfiles/*.geojson
 
 # Tooling
 # scripts/ ships into the container so admin_api can invoke
