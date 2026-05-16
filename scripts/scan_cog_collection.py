@@ -195,15 +195,21 @@ def scan_key(args):
     # case (some COGs near the projection's edge produce inf/nan output),
     # drop the web feature. The native footprint is still usable for the
     # raster TILEINDEX; we just lose this row in the web-mercator overlay.
+    native_zoom = None
     if all(math.isfinite(c) for pt in web_ring for c in pt):
         web = {
             "type": "Feature",
             "properties": properties,
             "geometry": {"type": "Polygon", "coordinates": [web_ring]},
         }
+        web_xs = [pt[0] for pt in web_ring]
+        web_width = max(web_xs) - min(web_xs)
+        if web_width > 0 and width > 0:
+            web_res = web_width / width
+            native_zoom = math.log2((20037508.342789244 * 2) / (256 * web_res))
     else:
         web = None
-    return native, web, epsg
+    return native, web, epsg, native_zoom
 
 
 def write_geojson(path, name, epsg, features):
@@ -315,12 +321,15 @@ def main():
         for key in keys
     ]
 
+    native_zooms = []
     dropped_web = 0
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = [executor.submit(scan_key, item) for item in work]
         for index, future in enumerate(as_completed(futures), start=1):
             try:
-                native, web, epsg = future.result()
+                native, web, epsg, nz = future.result()
+                if nz is not None:
+                    native_zooms.append(nz)
                 native_features.append(native)
                 if web is not None:
                     web_features.append(web)
@@ -423,6 +432,12 @@ def main():
         layer_name = args.layer_name or slugify(args.collection)
         map_name = args.map_name or f"{slugify(args.collection)}-imagery"
         label = args.label or args.collection
+        if native_zooms:
+            median_nz = sorted(native_zooms)[len(native_zooms) // 2]
+            collection_native_zoom = int(round(median_nz))
+        else:
+            collection_native_zoom = 18
+
         entry = {
             "id": args.collection,
             "layer_name": layer_name,
@@ -432,6 +447,7 @@ def main():
             "enabled": args.enabled == "true",
             "min_zoom": args.min_zoom,
             "max_zoom": args.max_zoom,
+            "native_zoom": collection_native_zoom,
             "draw_order": args.draw_order,
             "source": {
                 "bucket": args.bucket,

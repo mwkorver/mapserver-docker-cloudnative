@@ -41,7 +41,8 @@
       "tileindex_geojson": "/usr/src/mapfiles/ky_20x20_tileindex_3089.geojson",
       "footprints_geojson": "/usr/src/mapfiles/ky_20x20_tileindex.geojson",
       "postgis": false,
-      "indexed_at": "2026-05-01T00:00:00Z"
+      "indexed_at": "2026-05-01T00:00:00Z",
+      "native_zoom": 18
     },
     {
       "id": "nj-2020-1ft",

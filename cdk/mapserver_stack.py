@@ -43,6 +43,9 @@ class MapserverStack(Stack):
         config_bucket_name: str,
         ecr_repo_name: str,
         image_tag: str,
+        cpu: int = 4096,
+        memory: int = 8192,
+        ephemeral_storage_gib: int = 21,
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
@@ -283,8 +286,9 @@ class MapserverStack(Stack):
             self,
             "TaskDef",
             family="mapserver",
-            cpu=4096,
-            memory_limit_mib=8192,
+            cpu=cpu,
+            memory_limit_mib=memory,
+            ephemeral_storage_gib=ephemeral_storage_gib,
             runtime_platform=ecs.RuntimePlatform(
                 cpu_architecture=ecs.CpuArchitecture.ARM64,
                 operating_system_family=ecs.OperatingSystemFamily.LINUX,
@@ -306,14 +310,19 @@ class MapserverStack(Stack):
                 stream_prefix="ecs", log_group=log_group
             ),
             environment={
-                "MAPFILE_S3_URI": f"s3://{config_bucket_name}/mapfile.map",
+                # No MAPFILE_S3_URI: mapfile is derived at startup from the
+                # bundled collections.json by /etc/mapfile_generator.py.
+                # collections.json is the source of truth; the legacy
+                # "download a hand-written mapfile from S3" path is opt-in.
                 "DB_SECRET_ARN": db.secret.secret_arn,
                 "AWS_REGION": self.region,
                 "S3_BUCKET": "kyfromabove",
                 "S3_REGION": self.region,
                 "S3_SIGNING": "required",
                 "MAPSERVER_NUMPROCS": mapserver_numprocs,
-                "ADMIN_WRITE_ENABLED": "false",
+                # Allow admin UI writes in the deployed stack so the user can
+                # add collections via the web UI. Lock down later if exposed.
+                "ADMIN_WRITE_ENABLED": "true",
                 "FARGATE_CPU": "4096",
                 "FARGATE_MEMORY": "8192",
             },

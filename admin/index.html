@@ -182,6 +182,22 @@
       background: #f8fafc;
     }
 
+    .enabled-toggle.on {
+      background: #ecfdf5;
+      color: #047857;
+      border-color: #a7f3d0;
+      font-weight: 600;
+    }
+    .enabled-toggle.off {
+      background: #fef2f2;
+      color: #b91c1c;
+      border-color: #fecaca;
+      font-weight: 600;
+    }
+    .enabled-toggle:hover:not(:disabled) {
+      filter: brightness(0.97);
+    }
+
     input[type="number"], input[type="text"] {
       width: 72px;
       border: 1px solid var(--border);
@@ -573,13 +589,13 @@
           <div class="inline-form">
             <label for="gdal-cachemax-input">GDAL_CACHEMAX MB</label>
             <div>
-              <input id="gdal-cachemax-input" type="number" min="0" max="65536" step="64" disabled />
+              <input id="gdal-cachemax-input" type="number" min="16" max="65536" step="16" disabled />
             </div>
           </div>
           <div class="inline-form">
             <label for="vsi-cache-input">VSI_CACHE_SIZE MB</label>
             <div>
-              <input id="vsi-cache-input" type="number" min="0" max="65536" step="64" disabled />
+              <input id="vsi-cache-input" type="number" min="0" max="65536" step="1" disabled />
             </div>
           </div>
           <div class="inline-form">
@@ -635,6 +651,33 @@
           <div class="metric">
             <span>S3 signing</span>
             <span id="s3-signing">—</span>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2 id="cost-title">AWS Cost Estimate (Monthly)</h2>
+          <div class="metric">
+            <span>ALB (Load Balancer)</span>
+            <span id="cost-alb">~$16.00</span>
+          </div>
+          <div class="metric">
+            <span>ECS Fargate (1vCPU/4GB)</span>
+            <span id="cost-fargate">~$30.00</span>
+          </div>
+          <div class="metric">
+            <span>RDS (db.t4g.micro)</span>
+            <span id="cost-rds">~$12.00</span>
+          </div>
+          <div class="metric" style="border-top: 2px solid #edf1f5; font-weight: bold; margin-top: 8px; padding-top: 8px;">
+            <span>Total Running Cost</span>
+            <span id="cost-total">~$58.00 / mo</span>
+          </div>
+          <div class="metric" style="color: var(--good); font-size: 13px; margin-top: 4px; padding-top: 0; border-top: 0;">
+            <span>Parked Cost (scale to 0)</span>
+            <span id="cost-parked">~$16.00 / mo</span>
+          </div>
+          <div style="font-size: 12px; color: var(--muted); margin-top: 12px; line-height: 1.4;">
+            Use <code>cdk deploy -c parked=true</code> to park the stack and pause compute billing. Note: Data transfer and S3 storage are billed separately based on usage.
           </div>
         </div>
       </div>
@@ -768,19 +811,58 @@
     <section id="tab-benchmark" class="tab-panel">
       <div class="grid">
         <div class="panel">
-          <h2>Benchmark</h2>
-          <div class="metric">
-            <span>Status</span>
-            <span>planned</span>
+          <h2>Server-Side Benchmark</h2>
+          <p style="margin: 0 0 16px 0; font-size: 14px; color: var(--muted); line-height: 1.4;">
+            This benchmark executes parallel WMS requests from within the container, 
+            bypassing browser limits and network latency to accurately stress test the MapServer FastCGI workers.
+          </p>
+          <div class="input-group">
+            <label for="bench-concurrency">Concurrency (parallel requests)</label>
+            <input type="number" id="bench-concurrency" value="10" min="1" max="50">
           </div>
-          <div class="metric">
-            <span>First test target</span>
-            <span>browser-driven WMS tile samples</span>
+          <div class="input-group">
+            <label for="bench-requests">Total Requests</label>
+            <input type="number" id="bench-requests" value="50" min="10" max="1000">
           </div>
-          <div class="metric">
-            <span>Measurements</span>
-            <span>p50/p95 tile time, cache before/after</span>
+          <div class="input-group">
+            <label for="bench-zoom">Zoom Level</label>
+            <select id="bench-zoom"></select>
           </div>
+          <div class="input-group">
+            <label style="display: flex; align-items: center; gap: 8px;">
+              <input type="checkbox" id="bench-clear-cache"> Clear Nginx Cache before running
+            </label>
+          </div>
+          <div class="actions" style="margin-top: 16px;">
+            <button id="run-benchmark" class="primary">Run Benchmark</button>
+            <span id="bench-status" style="font-size: 14px; margin-left: 12px; font-weight: 500;"></span>
+          </div>
+        </div>
+
+        <div class="panel" style="grid-column: 1 / -1; overflow-x: auto;">
+          <h2>Results History</h2>
+          <table class="data-table" style="width: 100%; white-space: nowrap;">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Workers</th>
+                <th>GDAL Cache</th>
+                <th>Zoom</th>
+                <th>Cleared</th>
+                <th>Concurrency</th>
+                <th>Total</th>
+                <th>Avg (ms)</th>
+                <th>p50 (ms)</th>
+                <th>p95 (ms)</th>
+                <th>Total Time (s)</th>
+              </tr>
+            </thead>
+            <tbody id="bench-results">
+              <tr>
+                <td colspan="11" style="text-align: center; color: var(--muted);">No runs yet. Click "Run Benchmark" to start.</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
     </section>
@@ -809,12 +891,14 @@
 
     document.getElementById("wms-url").textContent = wmsUrl;
     let latestConfig = {};
+    let latestViewerConfig = {};
 
     async function loadViewerConfig() {
       try {
         const { response } = await timedFetch(viewerConfigUrl, { timeoutMs: 5000 });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const viewerConfig = await response.json();
+        latestViewerConfig = viewerConfig;
         if (viewerConfig.footprintUrl) {
           footprintUrl = new URL(viewerConfig.footprintUrl, window.location.origin).toString();
         }
@@ -1021,6 +1105,34 @@
         document.getElementById("nginx-cache-statuses").textContent = staticCache.cacheStatuses ?? "—";
         document.getElementById("nginx-cache-upstream").textContent = staticCache.upstream ?? "—";
         refreshDirtyState();
+
+        const region = config.awsRegion || "us-west-2";
+        const pricing = {
+          "us-east-1": { alb: 16.42, fargate: 30.00, rds: 12.00 },
+          "us-east-2": { alb: 16.42, fargate: 30.00, rds: 12.00 },
+          "us-west-1": { alb: 19.56, fargate: 35.50, rds: 14.50 },
+          "us-west-2": { alb: 16.42, fargate: 30.00, rds: 12.00 },
+          "eu-central-1": { alb: 19.56, fargate: 35.50, rds: 13.50 },
+          "eu-west-1": { alb: 17.52, fargate: 33.00, rds: 12.50 },
+          "ap-southeast-2": { alb: 19.56, fargate: 35.50, rds: 14.50 },
+          "default": { alb: 18.00, fargate: 33.00, rds: 13.00 }
+        };
+        const regionPrices = pricing[region] || pricing["default"];
+        const total = regionPrices.alb + regionPrices.fargate + regionPrices.rds;
+
+        document.getElementById("cost-title").textContent = `AWS Cost Estimate (${region})`;
+        const elAlb = document.getElementById("cost-alb");
+        const elFargate = document.getElementById("cost-fargate");
+        const elRds = document.getElementById("cost-rds");
+        const elTotal = document.getElementById("cost-total");
+        const elParked = document.getElementById("cost-parked");
+        
+        if(elAlb) elAlb.textContent = `~$${regionPrices.alb.toFixed(2)}`;
+        if(elFargate) elFargate.textContent = `~$${regionPrices.fargate.toFixed(2)}`;
+        if(elRds) elRds.textContent = `~$${regionPrices.rds.toFixed(2)}`;
+        if(elTotal) elTotal.textContent = `~$${total.toFixed(2)} / mo`;
+        if(elParked) elParked.textContent = `~$${regionPrices.alb.toFixed(2)} / mo`;
+
       } catch (error) {
         document.getElementById("mapserver-workers").textContent = "unknown";
         document.getElementById("fargate-cpu").textContent = "unknown";
@@ -1057,7 +1169,19 @@
         appendCell(row, collection.collectionName);
         appendCell(row, collection.layerName);
         appendCell(row, isActive ? "yes" : "no");
-        appendCell(row, collection.enabled ? "yes" : "no");
+
+        // Enabled column: clickable toggle that flips collection.enabled
+        // server-side, regenerates mapfile, restarts mapserver.
+        const enabledCell = document.createElement("td");
+        const enabledBtn = document.createElement("button");
+        enabledBtn.type = "button";
+        enabledBtn.className = "enabled-toggle " + (collection.enabled ? "on" : "off");
+        enabledBtn.textContent = collection.enabled ? "enabled" : "disabled";
+        enabledBtn.disabled = !latestConfig.writeEnabled;
+        enabledBtn.addEventListener("click", () => toggleCollectionEnabled(collection.collectionName, !collection.enabled, enabledBtn));
+        enabledCell.appendChild(enabledBtn);
+        row.appendChild(enabledCell);
+
         appendCell(row, `${collection.minZoom ?? "—"}-${collection.maxZoom ?? "—"}`);
         appendCell(row, Array.isArray(collection.sources) ? collection.sources.length.toLocaleString() : "0");
         appendCell(row, collection.status);
@@ -1124,6 +1248,36 @@
         ]);
       } catch (error) {
         logLine([`Active collection update failed: ${error.message}`]);
+      }
+    }
+
+    async function toggleCollectionEnabled(collectionName, target, button) {
+      const url = `${window.location.origin}/admin/api/collections/${encodeURIComponent(collectionName)}/enabled`;
+      const originalText = button.textContent;
+      button.disabled = true;
+      button.textContent = target ? "enabling…" : "disabling…";
+      try {
+        const { response } = await timedFetch(url, {
+          timeoutMs: 30000,
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: target }),
+        });
+        const result = await response.json();
+        if (!response.ok) {
+          throw new Error(result.error || `HTTP ${response.status}`);
+        }
+        renderCollections(result);   // table refreshes with updated state
+        await loadViewerConfig();    // viewer may pick a new active collection
+        logLine([
+          `${target ? "Enabled" : "Disabled"}: ${collectionName}`,
+          `mapfile_generator: ${result.mapfile || "—"}`,
+          `mapserver restart: ${result.mapserverRestart || "—"}`,
+        ]);
+      } catch (error) {
+        button.disabled = false;
+        button.textContent = originalText;
+        logLine([`Toggle ${collectionName} failed: ${error.message}`]);
       }
     }
 
@@ -1430,6 +1584,93 @@
 
 
 
+    async function runBenchmark() {
+      const btn = document.getElementById("run-benchmark");
+      const status = document.getElementById("bench-status");
+      btn.disabled = true;
+      status.textContent = "Running benchmark on server...";
+      status.className = "warn";
+      
+      const payload = {
+        concurrency: parseInt(document.getElementById("bench-concurrency").value),
+        requests: parseInt(document.getElementById("bench-requests").value),
+        clear_cache: document.getElementById("bench-clear-cache").checked,
+        zoom: parseInt(document.getElementById("bench-zoom").value)
+      };
+
+      try {
+        const { response } = await timedFetch("/admin/api/benchmark", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          timeoutMs: 60000
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Benchmark failed");
+
+        status.textContent = "Complete!";
+        status.className = "good";
+
+        const tbody = document.getElementById("bench-results");
+        if (tbody.querySelector("td[colspan]")) {
+          tbody.innerHTML = "";
+        }
+
+        const tr = document.createElement("tr");
+        const timeStr = new Date().toLocaleTimeString();
+        const workers = latestConfig.mapserverNumprocs;
+        const gdal = latestConfig.gdalCacheMaxMb;
+        
+        tr.innerHTML = `
+          <td>${timeStr}</td>
+          <td>${workers}</td>
+          <td>${gdal} MB</td>
+          <td>${payload.zoom}</td>
+          <td>${payload.clear_cache ? "Yes" : "No"}</td>
+          <td>${data.concurrency}</td>
+          <td>${data.requests} (${data.success} ok)</td>
+          <td>${data.avg_ms}</td>
+          <td>${data.p50_ms}</td>
+          <td><strong>${data.p95_ms}</strong></td>
+          <td>${(data.total_time_ms / 1000).toFixed(2)}s</td>
+        `;
+        tbody.insertBefore(tr, tbody.firstChild);
+
+      } catch (error) {
+        status.textContent = error.message;
+        status.className = "bad";
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    async function populateBenchmarkZoom() {
+      if (!latestViewerConfig) return;
+      const select = document.getElementById("bench-zoom");
+      if (!select) return;
+      
+      const nativeZoom = latestViewerConfig.nativeZoom || 18;
+      const currentVal = select.value;
+      select.innerHTML = "";
+      
+      const startZoom = nativeZoom + 1;
+      const endZoom = nativeZoom - 6;
+      
+      for (let z = startZoom; z >= endZoom; z--) {
+        if (z < 0 || z > 24) continue;
+        const opt = document.createElement("option");
+        opt.value = z;
+        opt.textContent = `${z}${z === nativeZoom ? " (Native)" : ""}`;
+        select.appendChild(opt);
+      }
+      
+      if (currentVal && select.querySelector(`option[value="${currentVal}"]`)) {
+        select.value = currentVal;
+      } else {
+        select.value = nativeZoom;
+      }
+    }
+
     function selectTab(name) {
       document.querySelectorAll(".tab-button").forEach((button) => {
         const active = button.dataset.tab === name;
@@ -1440,6 +1681,7 @@
         panel.classList.toggle("active", panel.id === `tab-${name}`);
       });
       if (name === "cache") refreshCacheStats();
+      if (name === "benchmark") populateBenchmarkZoom();
     }
 
     document.getElementById("refresh").addEventListener("click", refresh);
@@ -1447,6 +1689,7 @@
     document.getElementById("runtime-save").addEventListener("click", updateRuntime);
     document.getElementById("cache-refresh").addEventListener("click", refreshCacheStats);
     document.getElementById("cache-config-save").addEventListener("click", updateCacheConfig);
+    document.getElementById("run-benchmark").addEventListener("click", runBenchmark);
     [
       "numprocs-input",
       "gdal-cachemax-input",
