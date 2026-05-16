@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
+import concurrent.futures
 import datetime as dt
 import json
+import math
 import os
+import random
 import re
 import subprocess
 import threading
+import time
+import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -165,6 +170,7 @@ def _collection_to_viewer(collection):
         "bounds": _bounds_from_bbox_4326(bbox) or FALLBACK_VIEWER_CONFIG["bounds"],
         "center": _center_from_bbox_4326(bbox) or FALLBACK_VIEWER_CONFIG["center"],
         "imageryMinZoom": collection.get("min_zoom") or 14,
+        "nativeZoom": collection.get("native_zoom", 18),
         "attribution": collection.get("attribution", ""),
     }
 
@@ -374,7 +380,8 @@ def apply_mapfile_runtime(config):
         return
     map_text = MAPFILE.read_text()
     map_text = replace_or_insert_config(map_text, "GDAL_CACHEMAX", str(config["gdalCacheMaxMb"]))
-    map_text = replace_or_insert_config(map_text, "VSI_CACHE", "TRUE")
+    vsi_enabled = "FALSE" if config["vsiCacheSizeMb"] == 0 else "TRUE"
+    map_text = replace_or_insert_config(map_text, "VSI_CACHE", vsi_enabled)
     map_text = replace_or_insert_config(
         map_text,
         "VSI_CACHE_SIZE",
@@ -476,6 +483,7 @@ def admin_config():
         "fargateCpu": os.environ.get("FARGATE_CPU", "4096"),
         "fargateMemory": os.environ.get("FARGATE_MEMORY", "8192"),
         "s3Signing": os.environ.get("S3_SIGNING", "auto"),
+        "awsRegion": os.environ.get("AWS_REGION", "us-west-2"),
         "staticNginxCacheSettings": STATIC_NGINX_CACHE_SETTINGS,
         **runtime,
     }
@@ -570,6 +578,49 @@ def set_active_collection(collection_id):
         "activeCollection": collection_id,
         "viewer": _collection_to_viewer(selected),
         **config,
+    }
+
+
+def set_collection_enabled(collection_id, enabled):
+    """Flip enabled on a single collection, persist to collections.json,
+    regenerate the mapfile, and restart mapserver to pick up the new layer
+    layout."""
+    doc = _read_collections()
+    collections = doc.get("collections", [])
+    target = _collection_by_id(collections, collection_id)
+    if target is None:
+        raise ValueError(f"unknown collection: {collection_id}")
+
+    previous = bool(target.get("enabled", True))
+    new_value = bool(enabled)
+    if previous == new_value:
+        # No-op: just return current state without disturbing mapserver.
+        return collections_config()
+
+    # Mutate in place (target is a reference into collections).
+    target["enabled"] = new_value
+    doc["collections"] = collections
+    COLLECTIONS_FILE.write_text(json.dumps(doc, indent=2) + "\n")
+
+    # If we disabled the active collection, clear runtime.activeCollection
+    # so _active_collection() falls back to the first remaining enabled one.
+    if not new_value:
+        current = runtime_config()
+        if current.get("activeCollection") == collection_id:
+            current["activeCollection"] = ""
+            save_runtime_config(current)
+
+    # Regenerate mapfile + restart mapserver so the LAYER set reflects the
+    # new enabled flag. Both operations are 1-3s each.
+    regen_output = regenerate_mapfile()
+    restart_result = restart_mapserver_group()
+
+    return {
+        **collections_config(),
+        "collectionId": collection_id,
+        "enabled": new_value,
+        "mapfile": regen_output,
+        "mapserverRestart": restart_result,
     }
 
 
@@ -779,6 +830,95 @@ def list_jobs():
         return {"jobs": [dict(j) for j in _JOBS.values()]}
 
 
+def _tile_to_bbox_3857(x, y, z):
+    max_ext = 20037508.342789244
+    res = (max_ext * 2) / (2**z)
+    minx = -max_ext + x * res
+    miny = max_ext - (y + 1) * res
+    maxx = -max_ext + (x + 1) * res
+    maxy = max_ext - y * res
+    return f"{minx},{miny},{maxx},{maxy}"
+
+def _lonlat_to_xy(lon, lat, z):
+    n = 2.0 ** z
+    x = int((lon + 180.0) / 360.0 * n)
+    lat_rad = math.radians(lat)
+    y = int((1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0 * n)
+    return x, y
+
+def run_benchmark(payload):
+    concurrency = int(payload.get("concurrency", 10))
+    total_requests = int(payload.get("requests", 50))
+    clear_cache = bool(payload.get("clear_cache", False))
+
+    if clear_cache:
+        subprocess.run(["rm", "-rf", "/var/cache/nginx/cog/*"], check=False)
+
+    config = viewer_config()
+    bounds = config.get("bounds", [[37.0, -90.0], [42.0, -73.0]])
+    layer = config.get("layerName", "imagery")
+    
+    if "zoom" in payload:
+        zoom = int(payload["zoom"])
+    else:
+        zoom = config.get("imageryMinZoom", 14)
+
+    min_lat = min(bounds[0][0], bounds[1][0])
+    max_lat = max(bounds[0][0], bounds[1][0])
+    min_lon = min(bounds[0][1], bounds[1][1])
+    max_lon = max(bounds[0][1], bounds[1][1])
+
+    min_x, max_y = _lonlat_to_xy(min_lon, min_lat, zoom)
+    max_x, min_y = _lonlat_to_xy(max_lon, max_lat, zoom)
+    
+    if min_x > max_x: min_x, max_x = max_x, min_x
+    if min_y > max_y: min_y, max_y = max_y, min_y
+
+    urls = []
+    for _ in range(total_requests):
+        x = random.randint(min_x, max_x)
+        y = random.randint(min_y, max_y)
+        bbox = _tile_to_bbox_3857(x, y, zoom)
+        url = f"http://127.0.0.1/mapserv?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS={layer}&CRS=EPSG:3857&BBOX={bbox}&WIDTH=256&HEIGHT=256&FORMAT=image/png"
+        urls.append(url)
+
+    def fetch_url(url):
+        start = time.time()
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "MapServerBenchmark"})
+            with urllib.request.urlopen(req, timeout=10) as response:
+                response.read()
+                return time.time() - start, True
+        except Exception:
+            return time.time() - start, False
+
+    start_total = time.time()
+    results = []
+    success_count = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
+        for duration, success in executor.map(fetch_url, urls):
+            results.append(duration)
+            if success:
+                success_count += 1
+
+    total_duration = time.time() - start_total
+    results.sort()
+    avg = sum(results) / len(results) if results else 0
+    p50 = results[int(len(results) * 0.5)] if results else 0
+    p95 = results[int(len(results) * 0.95)] if results else 0
+
+    return {
+        "concurrency": concurrency,
+        "requests": total_requests,
+        "success": success_count,
+        "failed": total_requests - success_count,
+        "total_time_ms": int(total_duration * 1000),
+        "avg_ms": int(avg * 1000),
+        "p50_ms": int(p50 * 1000),
+        "p95_ms": int(p95 * 1000),
+    }
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
@@ -829,6 +969,20 @@ class Handler(BaseHTTPRequestHandler):
         write_error(self, 404, "not found")
 
     def do_POST(self):
+        if self.path == "/benchmark":
+            if not write_enabled():
+                write_error(self, 403, "admin writes are disabled")
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(length) or b"{}")
+                result = run_benchmark(payload)
+                write_json(self, 200, result)
+            except ValueError as exc:
+                write_error(self, 400, str(exc))
+            except Exception as exc:
+                write_error(self, 500, str(exc))
+            return
         if self.path == "/collections/scan":
             if not write_enabled():
                 write_error(self, 403, "admin writes are disabled")
@@ -851,6 +1005,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/collections/active":
             self.update_active_collection()
+            return
+        # Dynamic path: /collections/{id}/enabled
+        match = re.match(r"^/collections/([^/]+)/enabled$", self.path)
+        if match:
+            self.update_collection_enabled(match.group(1))
             return
         if self.path != "/numprocs":
             write_error(self, 404, "not found")
@@ -880,6 +1039,22 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("activeCollection is required")
             result = set_active_collection(collection_id.strip())
             write_json(self, 200, {**collections_config(), **result})
+        except ValueError as exc:
+            write_error(self, 400, str(exc))
+        except Exception as exc:
+            write_error(self, 500, str(exc))
+
+    def update_collection_enabled(self, collection_id):
+        if not write_enabled():
+            write_error(self, 403, "admin writes are disabled")
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(length) or b"{}")
+            if "enabled" not in payload:
+                raise ValueError("enabled is required")
+            result = set_collection_enabled(collection_id, payload["enabled"])
+            write_json(self, 200, result)
         except ValueError as exc:
             write_error(self, 400, str(exc))
         except Exception as exc:
