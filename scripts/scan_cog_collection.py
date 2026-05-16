@@ -74,10 +74,18 @@ def s3_endpoint(bucket, region):
     return f"https://{bucket}.s3.{region}.amazonaws.com/"
 
 
-def list_tiffs(bucket, prefix, region, limit):
+def list_tiffs(bucket, prefix, region, limit, requester_pays):
     endpoint = s3_endpoint(bucket, region)
     token = None
     keys = []
+
+    sys.path.append("/etc")
+    try:
+        import s3_sigv4_proxy
+        s3_sigv4_proxy.S3_BUCKET = bucket
+        s3_sigv4_proxy.S3_REGION = region
+    except ImportError:
+        s3_sigv4_proxy = None
 
     while True:
         params = {
@@ -87,9 +95,17 @@ def list_tiffs(bucket, prefix, region, limit):
         }
         if token:
             params["continuation-token"] = token
-        url = endpoint + "?" + urllib.parse.urlencode(params)
+            
+        query = urllib.parse.urlencode(params, quote_via=urllib.parse.quote)
+        url = endpoint + "?" + query
+        
+        headers = {}
+        if s3_sigv4_proxy:
+            extra = {"x-amz-request-payer": "requester"} if requester_pays else None
+            headers = s3_sigv4_proxy.signed_headers("GET", "/", query, None, extra)
 
-        with urllib.request.urlopen(url, timeout=60) as response:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=60) as response:
             root = ET.fromstring(response.read())
 
         for item in root.findall("s3:Contents", NS):
@@ -130,9 +146,8 @@ def transform_ring(ring, source_srs, target_srs):
 
 
 def scan_key(args):
-    key, bucket, region, proxy_base, collection, source_epsg_override = args
-    s3_url = f"https://{bucket}.s3.{region}.amazonaws.com/{urllib.parse.quote(key)}"
-    gdal_path = f"/vsicurl/{s3_url}"
+    key, bucket, region, proxy_base, collection, source_epsg_override, requester_pays = args
+    gdal_path = f"/vsis3/{bucket}/{key}"
     dataset = gdal.OpenEx(gdal_path, gdal.OF_RASTER)
     if dataset is None:
         raise RuntimeError(f"GDAL failed to open {gdal_path}")
@@ -169,7 +184,8 @@ def scan_key(args):
     native_ring = polygon_from_bounds(min_x, min_y, max_x, max_y)[0]
     web_ring = transform_ring(native_ring, source_srs, target_srs)
     file_name = key.rsplit("/", 1)[-1]
-    location = f"/vsicurl/{proxy_base.rstrip('/')}/{key.lstrip('/')}"
+    req_pays_flag = "requester-pays" if requester_pays else "standard"
+    location = f"/vsicurl/{proxy_base.rstrip('/')}/{req_pays_flag}/{region}/{bucket}/{key.lstrip('/')}"
     bands = dataset.RasterCount
     data_type = gdal.GetDataTypeName(dataset.GetRasterBand(1).DataType) if bands else "unknown"
     dataset = None
@@ -306,8 +322,29 @@ def slugify(value):
 
 def main():
     args = parse_args()
+    
+    # Sanitize inputs
+    if args.bucket.startswith("s3://"):
+        args.bucket = args.bucket[5:]
+    args.bucket = args.bucket.strip("/")
+    
+    if args.prefix.startswith("s3://"):
+        args.prefix = args.prefix[5:]
+    args.prefix = args.prefix.strip("/")
+    if args.prefix:
+        args.prefix += "/"
+        
+    requester_pays = args.access_mode == "requester-pays" or args.requester_pays
+    
+    gdal.SetConfigOption("AWS_REGION", args.region)
+    if args.access_mode == "unsigned":
+        gdal.SetConfigOption("AWS_NO_SIGN_REQUEST", "YES")
+    elif requester_pays:
+        gdal.SetConfigOption("AWS_REQUEST_PAYER", "requester")
+        gdal.SetConfigOption("AWS_NO_SIGN_REQUEST", "NO")
+        
     started = time.time()
-    keys = list_tiffs(args.bucket, args.prefix, args.region, args.limit)
+    keys = list_tiffs(args.bucket, args.prefix, args.region, args.limit, requester_pays)
     print(f"Discovered {len(keys)} GeoTIFFs under s3://{args.bucket}/{args.prefix}", flush=True)
     if not keys:
         raise SystemExit("No GeoTIFFs found")
@@ -317,7 +354,7 @@ def main():
     epsg_values = set()
     failures = []
     work = [
-        (key, args.bucket, args.region, args.proxy_base, args.collection, args.source_epsg)
+        (key, args.bucket, args.region, args.proxy_base, args.collection, args.source_epsg, requester_pays)
         for key in keys
     ]
 
