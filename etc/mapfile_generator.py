@@ -174,8 +174,9 @@ def tileindex_layer(c, db_conn):
     extent = c.get("extent_native") or [0, 0, 1000000, 1000000]
     use_postgis = bool(db_conn) and c.get("postgis", False)
     if use_postgis:
-        # PostGIS path assumes a native-CRS geom column named geom_native.
-        # This requires a schema migration before flipping postgis=true.
+        # cog_index.geom_native is generic GEOMETRY; per-row SRID is set by
+        # the scanner from collection.native_epsg. The USING SRID hint tells
+        # MapServer what to declare to clients.
         conn_block = [
             '    CONNECTIONTYPE POSTGIS',
             f'    CONNECTION "{db_conn}"',

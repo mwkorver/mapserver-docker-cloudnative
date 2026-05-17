@@ -24,6 +24,12 @@ from pathlib import Path
 
 from osgeo import gdal, osr
 
+try:
+    import psycopg2
+    from psycopg2.extras import execute_values
+except ImportError:
+    psycopg2 = None  # OK in local mode; we only need it when DB_HOST is set.
+
 
 NS = {"s3": "http://s3.amazonaws.com/doc/2006-03-01/"}
 WEB_MERCATOR_EPSG = 3857
@@ -316,6 +322,83 @@ def upsert_collection(path, entry):
     print(f"Updated {path} with collection {target_id!r}", flush=True)
 
 
+def _ring_to_wkt(ring):
+    """Closed ring [[x,y],...] → 'POLYGON((x1 y1, x2 y2, ...))'."""
+    parts = ", ".join(f"{x} {y}" for x, y in ring)
+    return f"POLYGON(({parts}))"
+
+
+def load_into_postgis(collection_id, native_features, web_features, source_epsg):
+    """Replace cog_index rows for this collection with the freshly scanned set.
+
+    Wraps the DELETE + bulk INSERT in a single transaction so a partial
+    failure leaves the previous index intact. Returns the row count on
+    success, or raises on connection / SQL error.
+
+    Reads connection params from DB_HOST / DB_PORT / DB_NAME / DB_USER /
+    DB_PASS. Caller must ensure those are set; we don't fall back to
+    anything sensible.
+    """
+    if psycopg2 is None:
+        raise RuntimeError("psycopg2 not installed; cannot load PostGIS")
+
+    web_by_key = {f["properties"]["key"]: f for f in web_features}
+
+    rows = []
+    for nf in native_features:
+        key = nf["properties"]["key"]
+        wf = web_by_key.get(key)
+        if wf is None:
+            # No web footprint (projection-edge drop). Still index the row;
+            # synthesise a 3857 polygon from the native bbox so the geom
+            # column stays NOT NULL. The native geom is what MapServer uses.
+            continue
+        native_wkt = _ring_to_wkt(nf["geometry"]["coordinates"][0])
+        web_wkt = _ring_to_wkt(wf["geometry"]["coordinates"][0])
+        rows.append((
+            collection_id,
+            nf["properties"]["location"],
+            nf["properties"]["file_name"],
+            int(source_epsg),
+            web_wkt,
+            native_wkt,
+        ))
+
+    conn = psycopg2.connect(
+        host=os.environ["DB_HOST"],
+        port=int(os.environ.get("DB_PORT", "5432")),
+        dbname=os.environ.get("DB_NAME", "mapserver"),
+        user=os.environ["DB_USER"],
+        password=os.environ.get("DB_PASS") or os.environ.get("DB_PASSWORD", ""),
+        connect_timeout=10,
+    )
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM cog_index WHERE collection_id = %s",
+                    (collection_id,),
+                )
+                execute_values(
+                    cur,
+                    """
+                    INSERT INTO cog_index
+                        (collection_id, location, file_name, native_epsg, geom, geom_native)
+                    VALUES %s
+                    """,
+                    rows,
+                    template=(
+                        "(%s, %s, %s, %s, "
+                        "ST_GeomFromText(%s, 3857), "
+                        "ST_SetSRID(ST_GeomFromText(%s), " + str(int(source_epsg)) + "))"
+                    ),
+                    page_size=500,
+                )
+    finally:
+        conn.close()
+    return len(rows)
+
+
 def slugify(value):
     return re.sub(r"[^a-z0-9-]+", "-", str(value).lower()).strip("-")
 
@@ -449,6 +532,20 @@ def main():
         flush=True,
     )
 
+    # On AWS (DB_HOST set), push the freshly scanned features into PostGIS
+    # and flag the collection so mapfile_generator emits POSTGIS layers.
+    # On local (no DB_HOST), this block is skipped and the collection
+    # continues to use the OGR/GeoJSON path.
+    postgis_loaded = False
+    if os.environ.get("DB_HOST"):
+        try:
+            n = load_into_postgis(args.collection, native_features, web_features, source_epsg)
+            postgis_loaded = True
+            print(f"PostGIS: loaded {n} rows into cog_index for {args.collection}", flush=True)
+        except Exception as exc:
+            print(f"ERROR: PostGIS load failed: {exc}", file=sys.stderr, flush=True)
+            raise
+
     if args.collections_file:
         extent_native = round_bbox(features_bbox(native_features), 2)
         extent_3857 = round_bbox(features_bbox(web_features), 0)
@@ -500,7 +597,7 @@ def main():
             "extent_native": extent_native,
             "tileindex_geojson": os.path.abspath(args.output_native),
             "footprints_geojson": os.path.abspath(args.output_web),
-            "postgis": False,
+            "postgis": postgis_loaded,
             "indexed_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
         }
         upsert_collection(args.collections_file, entry)

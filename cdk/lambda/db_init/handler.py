@@ -30,31 +30,21 @@ EXTENSIONS = [
 SCHEMA = """
 DROP TABLE IF EXISTS cog_index CASCADE;
 CREATE TABLE cog_index (
-    id          SERIAL PRIMARY KEY,
-    location    TEXT UNIQUE NOT NULL,
-    file_name   TEXT NOT NULL,
-    geom        GEOMETRY(MultiPolygon, 3857) NOT NULL,
-    geom_3089   GEOMETRY(MultiPolygon, 3089) NOT NULL,
-    res_m       DOUBLE PRECISION,
-    width       INT,
-    height      INT,
-    uploaded_at TIMESTAMPTZ DEFAULT now()
+    id            BIGSERIAL PRIMARY KEY,
+    collection_id TEXT NOT NULL,
+    location      TEXT NOT NULL,
+    file_name     TEXT NOT NULL,
+    native_epsg   INT  NOT NULL,
+    geom          GEOMETRY(Polygon, 3857) NOT NULL,
+    geom_native   GEOMETRY NOT NULL,
+    uploaded_at   TIMESTAMPTZ DEFAULT now(),
+    UNIQUE (collection_id, location)
 );
 
-CREATE INDEX cog_index_geom_idx ON cog_index USING GIST(geom);
-CREATE INDEX cog_index_geom_3089_idx ON cog_index USING GIST(geom_3089);
-CREATE INDEX cog_index_file_name_trgm ON cog_index USING GIN(file_name gin_trgm_ops);
-
-CREATE TABLE IF NOT EXISTS tile_status (
-    z           INT NOT NULL,
-    x           INT NOT NULL,
-    y           INT NOT NULL,
-    status      TEXT NOT NULL,
-    rendered_at TIMESTAMPTZ,
-    PRIMARY KEY (z, x, y)
-);
-
-CREATE INDEX IF NOT EXISTS tile_status_status_idx ON tile_status(status) WHERE status <> 'done';
+CREATE INDEX cog_index_collection_idx  ON cog_index(collection_id);
+CREATE INDEX cog_index_geom_idx        ON cog_index USING GIST(geom);
+CREATE INDEX cog_index_geom_native_idx ON cog_index USING GIST(geom_native);
+CREATE INDEX cog_index_file_name_trgm  ON cog_index USING GIN(file_name gin_trgm_ops);
 """
 
 
