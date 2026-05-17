@@ -196,46 +196,12 @@ class MapserverStack(Stack):
             self,
             "DbInitTrigger",
             service_token=provider.service_token,
-            properties={"version": "4"},  # add native EPSG:3089 raster tileindex
+            properties={"version": "5"},  # multi-collection cog_index schema
         )
 
-        # --- One-shot COG loader ------------------------------------------
-        # Manually invoked after stack is up. Reads the bundled
-        # ky_2024_grid.geojson tile grid and bulk-INSERTs into cog_index.
-        # Idempotent on `location`, safe to re-run.
-        load_fn = lambda_.Function(
-            self,
-            "LoadCogs",
-            runtime=lambda_.Runtime.PYTHON_3_12,
-            architecture=lambda_.Architecture.ARM_64,
-            handler="handler.main",
-            code=lambda_.Code.from_asset(
-                "lambda/load_cogs",
-                bundling=BundlingOptions(
-                    image=lambda_.Runtime.PYTHON_3_12.bundling_image,
-                    command=[
-                        "bash",
-                        "-c",
-                        "pip install -r requirements.txt -t /asset-output && cp -au . /asset-output",
-                    ],
-                ),
-            ),
-            timeout=Duration.minutes(5),
-            memory_size=1024,
-            vpc=vpc,
-            vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
-            security_groups=[init_sg],
-            allow_public_subnet=True,
-            environment={
-                "DB_HOST": db.instance_endpoint.hostname,
-                "DB_PORT": str(db.instance_endpoint.port),
-                "DB_NAME": "mapserver",
-                "DB_USER": db.secret.secret_value_from_json("username").unsafe_unwrap(),
-                "DB_PASSWORD": db.secret.secret_value_from_json("password").unsafe_unwrap(),
-            },
-        )
-
-        CfnOutput(self, "LoadCogsFunctionName", value=load_fn.function_name)
+        # COG loading is no longer a one-shot lambda. The admin scan flow
+        # (admin_api.py → scan_cog_collection.py, running in the Fargate
+        # task) populates cog_index per-collection when DB_HOST is set.
 
         # --- Perf API (Lambda Function URL) -------------------------------
         # Returns the most recent 100 WMS GetMap requests for the viewer's
