@@ -739,7 +739,7 @@ def _set_job_failed(job, message):
 def _run_scan(job_id, payload):
     job = _JOBS[job_id]
     collection_id = payload["collection_id"]
-    out_native = MAPFILES_DIR / f"{collection_id}_tileindex.geojson"
+    out_native = MAPFILES_DIR / f"{collection_id}_tileindex.fgb"
     out_web = MAPFILES_DIR / f"{collection_id}_footprints_3857.geojson"
 
     cmd = [
@@ -1057,7 +1057,7 @@ class Handler(BaseHTTPRequestHandler):
                 rt_config["activeCollection"] = ""
                 save_runtime_config(rt_config)
             
-            for key in ["tileindex_geojson", "footprints_geojson"]:
+            for key in ["tileindex", "tileindex_geojson", "footprints_geojson"]:
                 fpath = target.get(key)
                 if fpath:
                     try:
