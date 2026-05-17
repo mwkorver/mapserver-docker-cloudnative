@@ -60,6 +60,7 @@ RUN apt-get update && apt-get upgrade -y && \
     libcurl3t64-gnutls \
     libgeos-c1v5 \
     libpq5 \
+    python3-psycopg2 \
     libxml2 \
     libpng16-16t64 \
     zlib1g \
