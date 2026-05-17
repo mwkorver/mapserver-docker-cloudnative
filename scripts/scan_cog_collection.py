@@ -247,6 +247,64 @@ def write_geojson(path, name, epsg, features):
     Path(path).write_text(json.dumps(payload, separators=(",", ":")) + "\n")
 
 
+def write_tileindex_fgb(path, layer_name, epsg, features):
+    """Write a FlatGeobuf tile index (R-tree indexed, ~30% smaller than GeoJSON,
+    and ~25× faster for the bbox queries MapServer issues per WMS request).
+
+    Atomic via write-then-rename so a partial scanner crash leaves any
+    previous tile index intact.
+    """
+    out = Path(path)
+    tmp = out.with_suffix(out.suffix + ".tmp")
+    if tmp.exists():
+        tmp.unlink()
+
+    driver = gdal.GetDriverByName("FlatGeobuf")
+    if driver is None:
+        raise RuntimeError("GDAL FlatGeobuf driver not available")
+
+    srs = osr.SpatialReference()
+    srs.ImportFromEPSG(int(epsg))
+    srs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+
+    ds = driver.Create(str(tmp), 0, 0, 0, gdal.GDT_Unknown)
+    try:
+        layer = ds.CreateLayer(layer_name, srs=srs, geom_type=3)  # wkbPolygon = 3
+        # Declare attribute schema from first feature's properties.
+        if features:
+            from osgeo import ogr as _ogr  # local import; only here
+            for k, v in features[0]["properties"].items():
+                if isinstance(v, bool):
+                    ftype = _ogr.OFTInteger
+                elif isinstance(v, int):
+                    ftype = _ogr.OFTInteger64
+                elif isinstance(v, float):
+                    ftype = _ogr.OFTReal
+                else:
+                    ftype = _ogr.OFTString
+                layer.CreateField(_ogr.FieldDefn(k, ftype))
+
+            layer_defn = layer.GetLayerDefn()
+            for feat in features:
+                f = _ogr.Feature(layer_defn)
+                for k, v in feat["properties"].items():
+                    if v is not None:
+                        f.SetField(k, v)
+                ring = _ogr.Geometry(_ogr.wkbLinearRing)
+                for x, y in feat["geometry"]["coordinates"][0]:
+                    ring.AddPoint_2D(float(x), float(y))
+                poly = _ogr.Geometry(_ogr.wkbPolygon)
+                poly.AddGeometry(ring)
+                f.SetGeometry(poly)
+                layer.CreateFeature(f)
+                f = None
+        layer = None
+    finally:
+        ds = None  # close (flushes index)
+
+    tmp.replace(out)
+
+
 def features_bbox(features):
     """Return [minx, miny, maxx, maxy] across all rings, skipping non-finite points.
 
@@ -310,7 +368,7 @@ def upsert_collection(path, entry):
         if existing.get("id") == target_id:
             # Preserve user-edited fields (enabled, min_zoom, etc.) unless scanner
             # is the authority. Scanner owns: cog_count, bbox_*, extent_*, native_epsg,
-            # tileindex_geojson, footprints_geojson, indexed_at, source.
+            # tileindex, footprints_geojson, indexed_at, source.
             merged = {**existing, **entry}
             collections[i] = merged
             break
@@ -524,7 +582,8 @@ def main():
 
     native_features.sort(key=lambda feature: feature["properties"]["key"])
     web_features.sort(key=lambda feature: feature["properties"]["key"])
-    write_geojson(args.output_native, f"{args.collection}_tileindex_{source_epsg}", source_epsg, native_features)
+    tileindex_layer_name = f"{args.collection}_tileindex_{source_epsg}"
+    write_tileindex_fgb(args.output_native, tileindex_layer_name, source_epsg, native_features)
     write_geojson(args.output_web, f"{args.collection}_footprints_3857", WEB_MERCATOR_EPSG, web_features)
     elapsed = time.time() - started
     print(
@@ -595,7 +654,7 @@ def main():
             "bbox_4326": bbox_4326,
             "extent_3857": extent_3857_int,
             "extent_native": extent_native,
-            "tileindex_geojson": os.path.abspath(args.output_native),
+            "tileindex": os.path.abspath(args.output_native),
             "footprints_geojson": os.path.abspath(args.output_web),
             "postgis": postgis_loaded,
             "indexed_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
