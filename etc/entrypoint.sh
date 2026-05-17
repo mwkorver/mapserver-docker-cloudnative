@@ -1,248 +1,21 @@
 #!/bin/bash
 set -e
 
-write_local_preview_mapfile() {
-    case "${LOCAL_COLLECTION:-ky-2024-3in}" in
-        nj-2020-1ft)
-            write_nj_preview_mapfile
-            ;;
-        *)
-            write_ky_preview_mapfile
-            ;;
-    esac
-}
-
-write_ky_preview_mapfile() {
-    cat >/usr/src/mapfiles/mapfile.map <<'EOF'
-MAP
-  NAME "ky-imagery"
-  STATUS ON
-  SIZE 256 256
-  EXTENT -9968000 4368000 -9124000 4744000
-  UNITS METERS
-
-  OUTPUTFORMAT
-    NAME png24
-    DRIVER "AGG/PNG"
-    MIMETYPE "image/png"
-    IMAGEMODE RGB
-    EXTENSION "png"
-  END
-
-  IMAGETYPE png24
-  IMAGECOLOR 255 255 255
-
-  PROJECTION
-    "init=epsg:3857"
-  END
-
-  WEB
-    METADATA
-      "ows_title"           "KyFromAbove 2024 Imagery"
-      "ows_abstract"        "Local preview mode without PostGIS"
-      "ows_onlineresource"  "http://${PUBLIC_HOST}/mapserv"
-      "ows_srs"             "EPSG:3857 EPSG:4326 EPSG:3089"
-      "ows_enable_request"  "*"
-      "F_enable_request"    "*"
-      "wms_allow_getmap_without_styles" "true"
-    END
-  END
-
-  CONFIG "MS_ERRORFILE" "stderr"
-  CONFIG "MS_DEBUGLEVEL" "5"
-  CONFIG "CPL_DEBUG" "ON"
-  CONFIG "AWS_NO_SIGN_REQUEST" "YES"
-  CONFIG "GDAL_CACHEMAX" "128"
-  CONFIG "VSI_CACHE" "TRUE"
-  CONFIG "VSI_CACHE_SIZE" "33554432"
-  CONFIG "GDAL_DISABLE_READDIR_ON_OPEN" "TRUE"
-  CONFIG "GDAL_HTTP_MULTIPLEX" "YES"
-  CONFIG "GDAL_HTTP_VERSION" "2"
-  CONFIG "GDAL_HTTP_MERGE_CONSECUTIVE_RANGES" "YES"
-  CONFIG "CPL_VSIL_CURL_ALLOWED_EXTENSIONS" ".tif,.tiff"
-
-  LAYER
-    NAME "cog-extents"
-    TYPE POLYGON
-    STATUS ON
-    TEMPLATE "unused"
-    EXTENT -9523006 4553015 -9484241 4591943
-    CONNECTIONTYPE OGR
-    CONNECTION "/usr/src/mapfiles/ky_20x20_tileindex.geojson"
-    DATA "ky_20x20_tileindex"
-    PROJECTION
-      "init=epsg:3857"
-    END
-    METADATA
-      "ows_title"          "Local 20x20 COG Tile Index"
-      "ows_abstract"       "Local preview COG footprints"
-      "ows_srs"            "EPSG:3857 EPSG:4326"
-      "gml_include_items"  "all"
-      "gml_featureid"      "file_name"
-      "gml_geometries"     "msGeometry"
-      "gml_msGeometry_type" "multipolygon"
-      "ows_enable_request" "*"
-      "wfs_enable_request" "*"
-      "F_enable_request"   "*"
-      "ows_maxfeatures"    "10000"
-    END
-  END
-
-  LAYER
-    NAME "ky-2024"
-    TYPE RASTER
-    STATUS ON
-    TILEINDEX "cog-tileindex"
-    TILEITEM "location"
-    PROCESSING "BANDS=1,2,3"
-    PROCESSING "RESAMPLE=AVERAGE"
-    PROJECTION
-      "init=epsg:3089"
-    END
-    METADATA
-      "ows_title"    "KyFromAbove 2024 Season 1 (3 in)"
-      "ows_abstract" "Local 20x20 COG tile index preview through nginx cache"
-    END
-  END
-
-  LAYER
-    NAME "cog-tileindex"
-    TYPE POLYGON
-    STATUS OFF
-    EXTENT 4980000 3815000 5080000 3915000
-    CONNECTIONTYPE OGR
-    CONNECTION "/usr/src/mapfiles/ky_20x20_tileindex_3089.geojson"
-    DATA "ky_20x20_tileindex_3089"
-    PROJECTION
-      "init=epsg:3089"
-    END
-  END
-END
-EOF
-}
-
-write_nj_preview_mapfile() {
-    cat >/usr/src/mapfiles/mapfile.map <<'EOF'
-MAP
-  NAME "nj-imagery"
-  STATUS ON
-  SIZE 256 256
-  EXTENT -8412731 4709462 -8223562 5067461
-  UNITS METERS
-
-  OUTPUTFORMAT
-    NAME png24
-    DRIVER "AGG/PNG"
-    MIMETYPE "image/png"
-    IMAGEMODE RGB
-    EXTENSION "png"
-  END
-
-  IMAGETYPE png24
-  IMAGECOLOR 255 255 255
-
-  PROJECTION
-    "init=epsg:3857"
-  END
-
-  WEB
-    METADATA
-      "ows_title"           "NJ 2020 Imagery"
-      "ows_abstract"        "Local preview mode for NJ 2020 1-foot COGs"
-      "ows_onlineresource"  "http://${PUBLIC_HOST}/mapserv"
-      "ows_srs"             "EPSG:3857 EPSG:4326 EPSG:6527"
-      "ows_enable_request"  "*"
-      "F_enable_request"    "*"
-      "wms_allow_getmap_without_styles" "true"
-    END
-  END
-
-  CONFIG "MS_ERRORFILE" "stderr"
-  CONFIG "MS_DEBUGLEVEL" "5"
-  CONFIG "CPL_DEBUG" "ON"
-  CONFIG "AWS_NO_SIGN_REQUEST" "YES"
-  CONFIG "GDAL_CACHEMAX" "128"
-  CONFIG "VSI_CACHE" "TRUE"
-  CONFIG "VSI_CACHE_SIZE" "33554432"
-  CONFIG "GDAL_DISABLE_READDIR_ON_OPEN" "TRUE"
-  CONFIG "GDAL_HTTP_MULTIPLEX" "YES"
-  CONFIG "GDAL_HTTP_VERSION" "2"
-  CONFIG "GDAL_HTTP_MERGE_CONSECUTIVE_RANGES" "YES"
-  CONFIG "CPL_VSIL_CURL_ALLOWED_EXTENSIONS" ".tif,.tiff"
-
-  LAYER
-    NAME "cog-extents"
-    TYPE POLYGON
-    STATUS ON
-    TEMPLATE "unused"
-    EXTENT -8412731 4709462 -8223562 5067461
-    CONNECTIONTYPE OGR
-    CONNECTION "/usr/src/mapfiles/nj_2020_footprints_3857.geojson"
-    DATA "nj-2020-1ft_footprints_3857"
-    PROJECTION
-      "init=epsg:3857"
-    END
-    METADATA
-      "ows_title"          "NJ 2020 COG Tile Index"
-      "ows_abstract"       "NJ 2020 COG footprints"
-      "ows_srs"            "EPSG:3857 EPSG:4326"
-      "gml_include_items"  "all"
-      "gml_featureid"      "file_name"
-      "gml_geometries"     "msGeometry"
-      "gml_msGeometry_type" "multipolygon"
-      "ows_enable_request" "*"
-      "wfs_enable_request" "*"
-      "F_enable_request"   "*"
-      "ows_maxfeatures"    "10000"
-    END
-  END
-
-  LAYER
-    NAME "nj-2020"
-    TYPE RASTER
-    STATUS ON
-    TILEINDEX "cog-tileindex"
-    TILEITEM "location"
-    PROCESSING "BANDS=1,2,3"
-    PROCESSING "SCALE=AUTO"
-    PROCESSING "RESAMPLE=AVERAGE"
-    PROJECTION
-      "init=epsg:6527"
-    END
-    METADATA
-      "ows_title"    "NJ 2020 1-foot imagery"
-      "ows_abstract" "NJ 2020 COG tile index preview through nginx cache"
-    END
-  END
-
-  LAYER
-    NAME "cog-tileindex"
-    TYPE POLYGON
-    STATUS OFF
-    EXTENT 190000 30000 665000 925000
-    CONNECTIONTYPE OGR
-    CONNECTION "/usr/src/mapfiles/nj_2020_tileindex_6527.geojson"
-    DATA "nj-2020-1ft_tileindex_6527"
-    PROJECTION
-      "init=epsg:6527"
-    END
-  END
-END
-EOF
-}
-
-# Optional: download a fresh mapfile template from S3, overwriting the bundled one.
+# Optional override: pull a hand-written mapfile from S3 instead of
+# generating from collections.json. Escape hatch — not used by the
+# default CDK deployment.
 if [ -n "$MAPFILE_S3_URI" ]; then
     echo "Downloading mapfile from ${MAPFILE_S3_URI}..."
     if aws s3 cp "${MAPFILE_S3_URI}" /usr/src/mapfiles/mapfile.map; then
         echo "Mapfile ready."
     else
-        echo "WARN: mapfile download failed; using bundled image default."
+        echo "WARN: mapfile download failed; falling back to generator."
     fi
 fi
 
-# Fetch DB credentials from Secrets Manager and export the values that the
-# mapfile template references via ${DB_*} envsubst placeholders.
+# Fetch DB credentials from Secrets Manager if DB_SECRET_ARN is set.
+# The mapfile_generator picks POSTGIS or OGR backend per collection
+# based on DB_HOST being set plus the per-collection postgis flag.
 if [ -n "$DB_SECRET_ARN" ]; then
     echo "Fetching DB credentials from ${DB_SECRET_ARN}..."
     SECRET_JSON=$(aws secretsmanager get-secret-value \
@@ -267,6 +40,8 @@ fi
 
 sed -i "s/^numprocs=.*/numprocs=${MAPSERVER_NUMPROCS}/" /etc/supervisor/conf.d/supervisord.conf
 
+# Default to allowing admin writes when running without a DB (local dev
+# mode); deployed stack sets ADMIN_WRITE_ENABLED explicitly via CDK.
 if [ -z "$ADMIN_WRITE_ENABLED" ]; then
     if [ -z "$DB_SECRET_ARN" ] && [ -z "$DB_HOST" ]; then
         export ADMIN_WRITE_ENABLED="true"
@@ -289,43 +64,18 @@ cat >/usr/src/admin/config.json <<EOF
 }
 EOF
 
-# Mapfile generation order:
-#   1. If MAPFILE_S3_URI was downloaded above, leave it alone (user override).
-#   2. Else, run mapfile_generator.py against collections.json. Picks POSTGIS
-#      or OGR backend per layer based on DB_HOST + collection.postgis flag.
-#   3. As a safety net, envsubst whatever ${...} placeholders remain (for
-#      hand-written mapfiles uploaded via MAPFILE_S3_URI).
+# Generate the mapfile from collections.json unless an explicit
+# MAPFILE_S3_URI override was downloaded above.
 if [ -z "$MAPFILE_S3_URI" ] || [ ! -s /usr/src/mapfiles/mapfile.map ]; then
-    if [ -f /etc/mapfile_generator.py ]; then
-        echo "Generating mapfile from collections.json..."
-        python3 /etc/mapfile_generator.py
-    elif [ -z "$DB_SECRET_ARN" ] && [ -z "$DB_HOST" ]; then
-        # Fallback: legacy bash heredoc local-preview mode (kept until the
-        # generator is the only path everyone uses).
-        echo "No database and no generator; falling back to bundled preview."
-        write_local_preview_mapfile
-    fi
+    echo "Generating mapfile from collections.json..."
+    python3 /etc/mapfile_generator.py
 fi
 
+# envsubst safety net for hand-written mapfiles uploaded via MAPFILE_S3_URI
+# that use ${...} placeholders. No-op for generator output.
 if [ -f /usr/src/mapfiles/mapfile.map ]; then
-    echo "Running envsubst on mapfile (safety net for hand-written templates)..."
     envsubst < /usr/src/mapfiles/mapfile.map > /usr/src/mapfiles/mapfile.rendered.map
     mv /usr/src/mapfiles/mapfile.rendered.map /usr/src/mapfiles/mapfile.map
-fi
-
-# Legacy paths — kept for older mapfiles that still reference local VRT or
-# shapefile tileindex artifacts. Safe to leave unset when using PostGIS.
-if [ -n "$VRT_S3_URI" ]; then
-    echo "Downloading VRT from ${VRT_S3_URI}..."
-    aws s3 cp "${VRT_S3_URI}" /usr/src/mapfiles/mosaic.vrt
-fi
-
-if [ -n "$EXTENTS_S3_URI" ]; then
-    echo "Downloading tile extents from ${EXTENTS_S3_URI}..."
-    aws s3 cp "${EXTENTS_S3_URI}" /usr/src/mapfiles/tile_extents.geojson
-    ogr2ogr -f "ESRI Shapefile" /usr/src/mapfiles/tile_extents.shp \
-        /usr/src/mapfiles/tile_extents.geojson \
-        -t_srs EPSG:4326 -overwrite
 fi
 
 exec /usr/bin/supervisord -c /etc/supervisor/supervisord.conf

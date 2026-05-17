@@ -40,13 +40,9 @@ docker tag mapserver-docker-cloudnative:latest \
 docker push <acct>.dkr.ecr.us-west-2.amazonaws.com/mapserver-docker-cloudnative:latest
 ```
 
-Upload config files referenced by the task env vars:
-
-```bash
-aws s3 cp ../mapfiles/mapfile.map s3://mapserver-docker-cloudnative/mapfile.map
-aws s3 cp ../data/auckland_2024.vrt s3://mapserver-docker-cloudnative/
-aws s3 cp ../data/tile_extents.geojson s3://mapserver-docker-cloudnative/
-```
+The container generates `mapfile.map` from `collections.json` at startup, so
+no S3 upload of config files is required. (Optional escape hatch:
+`MAPFILE_S3_URI` will download a hand-written mapfile if set.)
 
 ## Deploy
 

@@ -22,8 +22,8 @@ EXTENSIONS = [
     # pgstac is not bundled with stock RDS PostgreSQL. CREATE EXTENSION will
     # fail with "could not open extension control file"; that's expected on a
     # fresh deploy. To install pgstac, run `pypgstac migrate` from a host that
-    # can reach the DB (use SSM tunnel — see scripts/load_cog_index.py for
-    # the pattern). The other extensions don't depend on it.
+    # can reach the DB (use an SSM tunnel from a bastion or local machine).
+    # The other extensions don't depend on it.
     "CREATE EXTENSION IF NOT EXISTS pgstac",
 ]
 

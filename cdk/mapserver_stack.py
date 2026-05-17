@@ -200,9 +200,9 @@ class MapserverStack(Stack):
         )
 
         # --- One-shot COG loader ------------------------------------------
-        # Manually invoked after stack is up. Reads tile_extents.geojson from
-        # the config bucket, bulk-INSERTs into cog_index. Idempotent on
-        # `location`, safe to re-run.
+        # Manually invoked after stack is up. Reads the bundled
+        # ky_2024_grid.geojson tile grid and bulk-INSERTs into cog_index.
+        # Idempotent on `location`, safe to re-run.
         load_fn = lambda_.Function(
             self,
             "LoadCogs",
