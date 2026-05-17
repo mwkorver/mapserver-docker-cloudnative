@@ -38,11 +38,11 @@
         5080000,
         3915000
       ],
-      "tileindex_geojson": "/usr/src/mapfiles/ky_20x20_tileindex_3089.geojson",
       "footprints_geojson": "/usr/src/mapfiles/ky_20x20_tileindex.geojson",
       "postgis": false,
       "indexed_at": "2026-05-01T00:00:00Z",
-      "native_zoom": 18
+      "native_zoom": 18,
+      "tileindex": "/usr/src/mapfiles/ky_20x20_tileindex_3089.fgb"
     },
     {
       "id": "nj-2020-1ft",
@@ -81,10 +81,10 @@
         665000,
         925000
       ],
-      "tileindex_geojson": "/usr/src/mapfiles/nj_2020_tileindex_6527.geojson",
       "footprints_geojson": "/usr/src/mapfiles/nj_2020_footprints_3857.geojson",
       "postgis": false,
-      "indexed_at": "2026-05-12T00:00:00Z"
+      "indexed_at": "2026-05-12T00:00:00Z",
+      "tileindex": "/usr/src/mapfiles/nj_2020_tileindex_6527.fgb"
     },
     {
       "id": "ky-2024-season13in",
@@ -123,10 +123,10 @@
         5680000.0,
         4310000.0
       ],
-      "tileindex_geojson": "/usr/src/mapfiles/ky-2024-season13in_tileindex.geojson",
       "footprints_geojson": "/usr/src/mapfiles/ky-2024-season13in_footprints_3857.geojson",
       "postgis": false,
-      "indexed_at": "2026-05-14T18:26:49Z"
+      "indexed_at": "2026-05-14T18:26:49Z",
+      "tileindex": "/usr/src/mapfiles/ky-2024-season13in_tileindex.fgb"
     }
   ]
 }

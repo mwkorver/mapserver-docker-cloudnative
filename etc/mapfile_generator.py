@@ -45,14 +45,23 @@ def db_connection_string():
     )
 
 
-def ogr_layer_name(geojson_path):
-    """Return the FeatureCollection.name field for use as DATA, fall back to file stem."""
-    try:
-        with open(geojson_path) as fh:
-            doc = json.load(fh)
-        return doc.get("name") or Path(geojson_path).stem
-    except (OSError, json.JSONDecodeError):
-        return Path(geojson_path).stem
+def ogr_layer_name(path):
+    """Return the layer name used as MapServer DATA value.
+
+    For GeoJSON we read the FeatureCollection.name field if set, since
+    OGR exposes it as the layer name. For binary OGR formats (FlatGeobuf
+    etc.) the layer name is the file stem by convention — and trying to
+    json.load() a binary file would crash with UnicodeDecodeError.
+    """
+    ext = Path(path).suffix.lower()
+    if ext in (".geojson", ".json"):
+        try:
+            with open(path) as fh:
+                doc = json.load(fh)
+            return doc.get("name") or Path(path).stem
+        except (OSError, json.JSONDecodeError):
+            return Path(path).stem
+    return Path(path).stem
 
 
 def union_extent(collections, key, fallback):
@@ -183,11 +192,14 @@ def tileindex_layer(c, db_conn):
             f'    DATA "geom_native FROM (SELECT id,location,geom_native FROM cog_index WHERE collection_id=\'{cid}\') AS sub USING UNIQUE id USING SRID={epsg}"',
         ]
     else:
-        geojson = c["tileindex_geojson"]
-        layer_name = ogr_layer_name(geojson)
+        # Tile index file (FGB preferred; legacy field name kept for
+        # forward compatibility with collections.json files written by
+        # older scanners).
+        tileindex = c.get("tileindex") or c.get("tileindex_geojson")
+        layer_name = ogr_layer_name(tileindex)
         conn_block = [
             '    CONNECTIONTYPE OGR',
-            f'    CONNECTION "{geojson}"',
+            f'    CONNECTION "{tileindex}"',
             f'    DATA "{layer_name}"',
         ]
     return [
