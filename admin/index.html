@@ -406,41 +406,13 @@
                   <th>Active</th>
                   <th>Enabled</th>
                   <th>Zoom</th>
-                  <th>Sources</th>
+                  <th>Source</th>
                   <th>Status</th>
                   <th>Action</th>
                 </tr>
               </thead>
               <tbody id="collections-body">
                 <tr><td colspan="8">Loading collections…</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div class="panel">
-          <h2>Collection Sources</h2>
-          <div class="metric">
-            <span>Source model</span>
-            <span>bucket + prefix + access</span>
-          </div>
-          <div class="metric">
-            <span>Next workflow</span>
-            <span>validate, build tile index, apply</span>
-          </div>
-          <div class="table-wrapper">
-            <table>
-              <thead>
-                <tr>
-                  <th>Collection</th>
-                  <th>Label</th>
-                  <th>Bucket</th>
-                  <th>Prefix</th>
-                  <th>Access</th>
-                </tr>
-              </thead>
-              <tbody id="collection-sources-body">
-                <tr><td colspan="5">Loading sources…</td></tr>
               </tbody>
             </table>
           </div>
@@ -1153,14 +1125,11 @@
     function renderCollections(payload) {
       const collections = Array.isArray(payload.collections) ? payload.collections : [];
       const collectionsBody = document.getElementById("collections-body");
-      const sourcesBody = document.getElementById("collection-sources-body");
       collectionsBody.textContent = "";
-      sourcesBody.textContent = "";
       document.getElementById("collection-count").textContent = collections.length.toLocaleString();
 
       if (collections.length === 0) {
         collectionsBody.innerHTML = '<tr><td colspan="8">No collections configured.</td></tr>';
-        sourcesBody.innerHTML = '<tr><td colspan="5">No sources configured.</td></tr>';
         return;
       }
 
@@ -1184,8 +1153,9 @@
         row.appendChild(enabledCell);
 
         appendCell(row, `${collection.minZoom ?? "—"}-${collection.maxZoom ?? "—"}`);
-        appendCell(row, Array.isArray(collection.sources) ? collection.sources.length.toLocaleString() : "0");
+        appendCell(row, collection.source ? `${collection.source.bucket}/${collection.source.prefix}` : "—");
         appendCell(row, collection.status);
+        
         const actionCell = document.createElement("td");
         const actionButton = document.createElement("button");
         actionButton.type = "button";
@@ -1194,18 +1164,24 @@
         actionButton.dataset.collectionName = collection.collectionName;
         actionButton.addEventListener("click", () => activateCollection(collection.collectionName));
         actionCell.appendChild(actionButton);
+        
+        const deleteButton = document.createElement("button");
+        deleteButton.type = "button";
+        deleteButton.textContent = "Delete";
+        deleteButton.style.marginLeft = "8px";
+        deleteButton.style.backgroundColor = "#c92a2a";
+        deleteButton.style.color = "white";
+        deleteButton.style.borderColor = "#c92a2a";
+        deleteButton.disabled = !latestConfig.writeEnabled;
+        deleteButton.addEventListener("click", () => {
+          if (confirm(`Are you sure you want to delete ${collection.collectionName}?`)) {
+            deleteCollection(collection.collectionName);
+          }
+        });
+        actionCell.appendChild(deleteButton);
+        
         row.appendChild(actionCell);
         collectionsBody.appendChild(row);
-
-        (collection.sources || []).forEach((source) => {
-          const sourceRow = document.createElement("tr");
-          appendCell(sourceRow, collection.collectionName);
-          appendCell(sourceRow, source.label);
-          appendCell(sourceRow, source.bucket);
-          appendCell(sourceRow, source.prefix);
-          appendCell(sourceRow, source.requesterPays ? `${source.accessMode} (requester pays)` : source.accessMode);
-          sourcesBody.appendChild(sourceRow);
-        });
       });
     }
 
@@ -1220,8 +1196,6 @@
         document.getElementById("collection-count").textContent = "unknown";
         document.getElementById("collections-body").innerHTML =
           `<tr><td colspan="8">Collections unavailable: ${error.message}</td></tr>`;
-        document.getElementById("collection-sources-body").innerHTML =
-          `<tr><td colspan="5">Sources unavailable: ${error.message}</td></tr>`;
       }
     }
 
@@ -1279,6 +1253,30 @@
         button.disabled = false;
         button.textContent = originalText;
         logLine([`Toggle ${collectionName} failed: ${error.message}`]);
+      }
+    }
+
+    async function deleteCollection(collectionId) {
+      if (!latestConfig.writeEnabled) {
+        showError("Admin writes are disabled. Cannot delete collection.");
+        return;
+      }
+      try {
+        const { response } = await timedFetch(`${collectionsUrl}/${encodeURIComponent(collectionId)}`, {
+          method: "DELETE",
+          timeoutMs: 15000
+        });
+        if (!response.ok) {
+          let errorMsg = `HTTP ${response.status}`;
+          try {
+            const errJson = await response.json();
+            if (errJson.error) errorMsg = errJson.error;
+          } catch (e) {}
+          throw new Error(errorMsg);
+        }
+        await loadCollections();
+      } catch (err) {
+        showError(`Failed to delete collection: ${err.message}`);
       }
     }
 

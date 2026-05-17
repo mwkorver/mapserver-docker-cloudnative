@@ -22,14 +22,16 @@ test.describe("admin dashboard", () => {
     }
   });
 
-  test("renders seeded collection sources", async ({ page }) => {
+  test("renders seeded collections with sources", async ({ page }) => {
     await expect(page.getByRole("tab", { name: "Collections" })).toHaveAttribute("aria-selected", "true");
     await expect(page.locator("#collection-count")).toHaveText("3");
+    // Collection-id rows
     await expect(page.locator("#collections-body").getByRole("cell", { name: "ky-2024-3in", exact: true }).first()).toBeVisible();
     await expect(page.locator("#collections-body").getByRole("cell", { name: "nj-2020-1ft", exact: true }).first()).toBeVisible();
     await expect(page.locator("#collections-body").getByRole("cell", { name: "ky-2024-season13in", exact: true }).first()).toBeVisible();
-    await expect(page.locator("#collection-sources-body").getByRole("cell", { name: "kyfromabove", exact: true }).first()).toBeVisible();
-    await expect(page.locator("#collection-sources-body").getByRole("cell", { name: "njogis-imagery", exact: true }).first()).toBeVisible();
+    // Source bucket column was folded into the main Collections table.
+    await expect(page.locator("#collections-body").getByText("kyfromabove").first()).toBeVisible();
+    await expect(page.locator("#collections-body").getByText("njogis-imagery").first()).toBeVisible();
   });
 
   test("can switch active collection for visualization", async ({ page }) => {

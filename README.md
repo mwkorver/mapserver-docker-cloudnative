@@ -40,6 +40,8 @@ docker run --rm \
   <your-image>
 ```
 
+*(Note: If you are using temporary SSO/STS credentials for local development, they will typically expire in 1 hour. You can run `./scripts/auto_refresh_credentials.sh` in the background to automatically inject fresh tokens into your running container indefinitely without losing your state).*
+
 ### 2. Configure via Admin UI
 
 1. Open `http://localhost:8080/admin/` in your browser.

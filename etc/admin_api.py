@@ -118,16 +118,14 @@ def _collection_to_ui(collection):
         "maxZoom": collection.get("max_zoom"),
         "drawOrder": collection.get("draw_order", 10),
         "status": _collection_status(collection),
-        "sources": [
-            {
-                "label": collection.get("label") or collection.get("id"),
-                "bucket": source.get("bucket"),
-                "prefix": source.get("prefix"),
-                "region": source.get("region", "us-west-2"),
-                "accessMode": source.get("access_mode", "unsigned"),
-                "requesterPays": bool(source.get("requester_pays")),
-            }
-        ],
+        "source": {
+            "label": collection.get("label") or collection.get("id"),
+            "bucket": source.get("bucket"),
+            "prefix": source.get("prefix"),
+            "region": source.get("region", "us-west-2"),
+            "accessMode": source.get("access_mode", "unsigned"),
+            "requesterPays": bool(source.get("requester_pays")),
+        },
     }
 
 
@@ -999,6 +997,13 @@ class Handler(BaseHTTPRequestHandler):
             return
         write_error(self, 404, "not found")
 
+    def do_DELETE(self):
+        match = re.match(r"^/collections/([^/]+)$", self.path)
+        if match:
+            self.delete_collection(match.group(1))
+            return
+        write_error(self, 404, "not found")
+
     def do_PUT(self):
         if self.path == "/runtime":
             self.update_runtime()
@@ -1022,6 +1027,48 @@ class Handler(BaseHTTPRequestHandler):
             payload = json.loads(self.rfile.read(length) or b"{}")
             result = set_numprocs(payload.get("mapserverNumprocs"))
             write_json(self, 200, {**admin_config(), **result})
+        except ValueError as exc:
+            write_error(self, 400, str(exc))
+        except Exception as exc:
+            write_error(self, 500, str(exc))
+
+    def delete_collection(self, collection_id):
+        if not write_enabled():
+            write_error(self, 403, "admin writes are disabled")
+            return
+        try:
+            docs = _read_collections()
+            collections = docs.get("collections", [])
+            
+            target = None
+            for i, c in enumerate(collections):
+                if c.get("id") == collection_id:
+                    target = collections.pop(i)
+                    break
+                    
+            if not target:
+                raise ValueError(f"Collection {collection_id} not found")
+                
+            docs["collections"] = collections
+            COLLECTIONS_FILE.write_text(json.dumps(docs, indent=2) + "\n")
+            
+            rt_config = runtime_config()
+            if rt_config.get("activeCollection") == collection_id:
+                rt_config["activeCollection"] = ""
+                save_runtime_config(rt_config)
+            
+            for key in ["tileindex_geojson", "footprints_geojson"]:
+                fpath = target.get(key)
+                if fpath:
+                    try:
+                        Path(fpath).unlink(missing_ok=True)
+                    except Exception as exc:
+                        print(f"WARN: failed to delete {fpath}: {exc}", file=sys.stderr)
+                        
+            regenerate_mapfile()
+            restart_mapserver_group()
+            
+            write_json(self, 200, collections_config())
         except ValueError as exc:
             write_error(self, 400, str(exc))
         except Exception as exc:
