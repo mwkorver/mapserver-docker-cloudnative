@@ -13,6 +13,20 @@ if [ -n "$MAPFILE_S3_URI" ]; then
     fi
 fi
 
+# Optional durable collection catalog. In Fargate the task filesystem is
+# ephemeral, so deployed stacks should set COLLECTIONS_S3_URI and treat S3 as
+# the source of truth for collection metadata. If the object is missing, keep
+# the bundled development seed collections and let the first admin mutation
+# upload the file.
+if [ -n "$COLLECTIONS_S3_URI" ]; then
+    echo "Downloading collections from ${COLLECTIONS_S3_URI}..."
+    if aws s3 cp "${COLLECTIONS_S3_URI}" /usr/src/mapfiles/collections.json; then
+        echo "Collections catalog ready."
+    else
+        echo "WARN: collections download failed; using bundled collections.json."
+    fi
+fi
+
 # Fetch DB credentials from Secrets Manager if DB_SECRET_ARN is set.
 # The mapfile_generator picks POSTGIS or OGR backend per collection
 # based on DB_HOST being set plus the per-collection postgis flag.
