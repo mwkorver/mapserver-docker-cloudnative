@@ -330,6 +330,16 @@
       margin-top: 6px;
     }
 
+    .code-snippet {
+      background: #0f172a;
+      color: #e2e8f0;
+      border-radius: 8px;
+      padding: 10px 12px;
+      white-space: pre-wrap;
+      overflow-x: auto;
+      font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
     .timestamp {
       color: var(--muted);
       font-size: 13px;
@@ -359,15 +369,6 @@
     .tab-panel { display: none; }
     .tab-panel.active { display: block; }
 
-    .viewer-placeholder {
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      background: #f8fafc;
-      color: var(--muted);
-      padding: 18px;
-      line-height: 1.5;
-    }
-
   </style>
 </head>
 <body>
@@ -381,7 +382,6 @@
       <button class="tab-button active" data-tab="collections" role="tab" aria-selected="true">Collections</button>
       <button class="tab-button" data-tab="runtime" role="tab" aria-selected="false">Runtime</button>
       <button class="tab-button" data-tab="cache" role="tab" aria-selected="false">Cache</button>
-      <button class="tab-button" data-tab="visualize" role="tab" aria-selected="false">Visualize</button>
       <button class="tab-button" data-tab="benchmark" role="tab" aria-selected="false">Benchmark</button>
     </div>
 
@@ -472,11 +472,11 @@
             <div class="scan-field-row">
               <div class="scan-field">
                 <label for="scan-min-zoom">Min zoom</label>
-                <input type="number" id="scan-min-zoom" value="14" min="0" max="24" />
+                <input type="number" id="scan-min-zoom" min="0" placeholder="auto: native - 4" />
               </div>
               <div class="scan-field">
                 <label for="scan-max-zoom">Max zoom</label>
-                <input type="number" id="scan-max-zoom" value="22" min="0" max="24" />
+                <input type="number" id="scan-max-zoom" min="0" placeholder="auto: native + 1" />
               </div>
               <div class="scan-field">
                 <label for="scan-draw-order">Draw order</label>
@@ -498,6 +498,24 @@
           </div>
           <div id="scan-jobs-empty" class="timestamp">No scans submitted yet.</div>
           <div id="scan-jobs"></div>
+
+          <h2 style="margin-top: 18px">Local AWS credentials</h2>
+          <div class="timestamp">
+            For signed or requester-pays scans in local Docker, keep refreshing temporary AWS credentials into the container.
+            Replace <code>your-profile</code>, or omit <code>AWS_PROFILE=...</code> for your default profile.
+          </div>
+          <pre class="code-snippet">AWS_PROFILE=your-profile ./scripts/auto_refresh_credentials.sh</pre>
+          <details>
+            <summary class="timestamp">Show inline loop</summary>
+            <pre class="code-snippet">while true; do
+  tmp_creds="$(mktemp /tmp/mapserver-creds.XXXXXX.json)"
+  aws configure export-credentials --profile your-profile &gt; "$tmp_creds" &amp;&amp; \
+    jq -e '.AccessKeyId and .SecretAccessKey' "$tmp_creds" &gt;/dev/null &amp;&amp; \
+    docker cp "$tmp_creds" mapserver:/tmp/aws_credentials.json
+  rm -f "$tmp_creds"
+  sleep 900
+done</pre>
+          </details>
         </div>
       </div>
     </section>
@@ -520,24 +538,24 @@
             <span id="wms-time">—</span>
           </div>
           <div class="metric">
-            <span>Viewer</span>
-            <span><a id="viewer-link" href="/viewer/">open</a></span>
+            <span>GetCapabilities</span>
+            <span><a id="capabilities-link" href="/mapserv?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetCapabilities" target="_blank" rel="noopener">open</a></span>
           </div>
         </div>
 
         <div class="panel">
-          <h2>Runtime Config</h2>
+          <h2>MapServer</h2>
           <div class="metric">
             <span>WMS endpoint</span>
             <span id="wms-url">/mapserv</span>
           </div>
           <div class="metric">
-            <span>Imagery min zoom</span>
-            <span id="imagery-min-zoom-display">—</span>
+            <span>Configured workers</span>
+            <span id="mapserver-workers">—</span>
           </div>
           <div class="metric">
-            <span>MapServer workers</span>
-            <span id="mapserver-workers">—</span>
+            <span>Observed workers</span>
+            <span id="mapserver-observed-workers">—</span>
           </div>
           <div class="inline-form">
             <label for="numprocs-input">Set workers</label>
@@ -557,7 +575,7 @@
         </div>
 
         <div class="panel">
-          <h2>GDAL / Viewer Tuning</h2>
+          <h2>GDAL Tuning</h2>
           <div class="inline-form">
             <label for="gdal-cachemax-input">GDAL_CACHEMAX MB</label>
             <div>
@@ -568,12 +586,6 @@
             <label for="vsi-cache-input">VSI_CACHE_SIZE MB</label>
             <div>
               <input id="vsi-cache-input" type="number" min="0" max="65536" step="1" disabled />
-            </div>
-          </div>
-          <div class="inline-form">
-            <label for="imagery-min-zoom-input">Imagery min zoom</label>
-            <div>
-              <input id="imagery-min-zoom-input" type="number" min="0" max="22" step="1" disabled />
             </div>
           </div>
           <div class="inline-form">
@@ -597,59 +609,32 @@
         <div class="panel">
           <h2>COG Index</h2>
           <div class="metric">
-            <span>Local footprint file</span>
-            <span id="footprint-status" class="status muted">not checked</span>
+            <span>Active collection</span>
+            <span id="index-active-collection">—</span>
+          </div>
+          <div class="metric">
+            <span>Backend</span>
+            <span id="index-backend">—</span>
+          </div>
+          <div class="metric">
+            <span>COGs</span>
+            <span id="index-cog-count">—</span>
+          </div>
+          <div class="metric">
+            <span>Native EPSG</span>
+            <span id="index-native-epsg">—</span>
           </div>
           <div class="metric">
             <span>Footprint count</span>
             <span id="footprint-count">—</span>
           </div>
           <div class="metric">
-            <span>Index mode</span>
-            <span>PostGIS in AWS, GeoJSON locally</span>
-          </div>
-        </div>
-
-        <div class="panel">
-          <h2>Deployment</h2>
-          <div class="metric">
-            <span>Fargate CPU</span>
-            <span id="fargate-cpu">—</span>
+            <span>Footprints</span>
+            <span id="footprint-status" class="status muted">not checked</span>
           </div>
           <div class="metric">
-            <span>Fargate memory</span>
-            <span id="fargate-memory">—</span>
-          </div>
-          <div class="metric">
-            <span>S3 signing</span>
-            <span id="s3-signing">—</span>
-          </div>
-        </div>
-
-        <div class="panel">
-          <h2 id="cost-title">AWS Cost Estimate (Monthly)</h2>
-          <div class="metric">
-            <span>ALB (Load Balancer)</span>
-            <span id="cost-alb">~$16.00</span>
-          </div>
-          <div class="metric">
-            <span>ECS Fargate (1vCPU/4GB)</span>
-            <span id="cost-fargate">~$30.00</span>
-          </div>
-          <div class="metric">
-            <span>RDS (db.t4g.micro)</span>
-            <span id="cost-rds">~$12.00</span>
-          </div>
-          <div class="metric" style="border-top: 2px solid #edf1f5; font-weight: bold; margin-top: 8px; padding-top: 8px;">
-            <span>Total Running Cost</span>
-            <span id="cost-total">~$58.00 / mo</span>
-          </div>
-          <div class="metric" style="color: var(--good); font-size: 13px; margin-top: 4px; padding-top: 0; border-top: 0;">
-            <span>Parked Cost (scale to 0)</span>
-            <span id="cost-parked">~$16.00 / mo</span>
-          </div>
-          <div style="font-size: 12px; color: var(--muted); margin-top: 12px; line-height: 1.4;">
-            Use <code>cdk deploy -c parked=true</code> to park the stack and pause compute billing. Note: Data transfer and S3 storage are billed separately based on usage.
+            <span>Index source</span>
+            <span id="index-source">—</span>
           </div>
         </div>
       </div>
@@ -670,6 +655,14 @@
           <div class="metric">
             <span>Cache size</span>
             <span id="nginx-cache-size">—</span>
+          </div>
+          <div class="metric">
+            <span>NGINX workers</span>
+            <span id="nginx-workers">—</span>
+          </div>
+          <div class="metric">
+            <span>Cache status API</span>
+            <span><a id="nginx-cache-api-link" href="/admin/api/nginx-cache" target="_blank" rel="noopener">open</a></span>
           </div>
           <div class="metric">
             <span>Last refreshed</span>
@@ -738,43 +731,6 @@
           <div class="metric">
             <span>Upstream signer</span>
             <span id="nginx-cache-upstream">—</span>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <section id="tab-visualize" class="tab-panel">
-      <div class="grid">
-        <div class="panel">
-          <h2>Map Preview</h2>
-          <div class="metric">
-            <span>Viewer</span>
-            <span><a id="viewer-full-link" href="/viewer/" target="_blank" rel="noopener">open full viewer</a></span>
-          </div>
-          <div class="viewer-placeholder">
-            The admin dashboard does not embed the map viewer. Large footprint
-            collections can make embedded maps expensive in the in-app browser.
-            Use the full viewer link after selecting a collection.
-          </div>
-        </div>
-
-        <div class="panel">
-          <h2>Quick Links</h2>
-          <div class="metric">
-            <span>WMS endpoint</span>
-            <span><a id="mapserv-link" href="/mapserv" target="_blank" rel="noopener">/mapserv</a></span>
-          </div>
-          <div class="metric">
-            <span>GetCapabilities</span>
-            <span><a id="capabilities-link" href="/mapserv?SERVICE=WMS&amp;VERSION=1.3.0&amp;REQUEST=GetCapabilities" target="_blank" rel="noopener">open</a></span>
-          </div>
-          <div class="metric">
-            <span>Footprints GeoJSON</span>
-            <span><a id="footprints-link" href="/ky_20x20_tileindex.geojson" target="_blank" rel="noopener">open</a></span>
-          </div>
-          <div class="metric">
-            <span>Viewer config</span>
-            <span><a id="viewer-config-link" href="/viewer/config.json" target="_blank" rel="noopener">open</a></span>
           </div>
         </div>
       </div>
@@ -863,6 +819,7 @@
     const activeCollectionUrl = `${window.location.origin}/admin/api/collections/active`;
 
     document.getElementById("wms-url").textContent = wmsUrl;
+    document.getElementById("capabilities-link").href = capabilitiesUrl;
     let latestConfig = {};
     let latestViewerConfig = {};
 
@@ -875,7 +832,6 @@
         if (viewerConfig.footprintUrl) {
           footprintUrl = new URL(viewerConfig.footprintUrl, window.location.origin).toString();
         }
-        refreshLinks();
         return viewerConfig;
       } catch (error) {
         return {};
@@ -916,22 +872,6 @@
       button.disabled = !latestConfig.writeEnabled || !dirty;
     }
 
-    function setLink(id, href, label = null) {
-      const link = document.getElementById(id);
-      link.href = href;
-      if (label !== null) link.textContent = label;
-    }
-
-    function refreshLinks() {
-      const viewerUrl = `${window.location.origin}/viewer/`;
-      setLink("viewer-link", viewerUrl, "open");
-      setLink("viewer-full-link", viewerUrl, "open full viewer");
-      setLink("mapserv-link", wmsUrl, wmsUrl);
-      setLink("capabilities-link", capabilitiesUrl, "open");
-      setLink("footprints-link", footprintUrl, new URL(footprintUrl).pathname);
-      setLink("viewer-config-link", viewerConfigUrl, "open");
-    }
-
     function cacheMaxSizeGb() {
       return Number.parseInt(document.getElementById("nginx-cache-max-size-input").value, 10);
     }
@@ -947,7 +887,6 @@
       const runtimeDirty =
         Number.parseInt(document.getElementById("gdal-cachemax-input").value, 10) !== latestConfig.gdalCacheMaxMb ||
         Number.parseInt(document.getElementById("vsi-cache-input").value, 10) !== latestConfig.vsiCacheSizeMb ||
-        Number.parseInt(document.getElementById("imagery-min-zoom-input").value, 10) !== latestConfig.imageryMinZoom ||
         document.getElementById("mapserver-debug-input").checked !== Boolean(latestConfig.mapserverDebug);
       const cacheDirty =
         cacheMaxSizeGb() !== loadedCacheMaxSizeGb() ||
@@ -1048,22 +987,27 @@
         }
         const config = await response.json();
         latestConfig = config;
+        const backend = config.indexBackend || {};
         document.getElementById("mapserver-workers").textContent = config.mapserverNumprocs ?? "—";
-        document.getElementById("fargate-cpu").textContent = config.fargateCpu ?? "—";
-        document.getElementById("fargate-memory").textContent = config.fargateMemory ? `${config.fargateMemory} MB` : "—";
-        document.getElementById("s3-signing").textContent = config.s3Signing ?? "—";
+        document.getElementById("mapserver-observed-workers").textContent = config.mapserverWorkers ?? "—";
+        document.getElementById("index-active-collection").textContent = backend.activeCollection || "—";
+        document.getElementById("index-backend").textContent = backend.backend || "—";
+        document.getElementById("index-cog-count").textContent = Number.isFinite(backend.cogCount)
+          ? backend.cogCount.toLocaleString()
+          : "—";
+        document.getElementById("index-native-epsg").textContent = Array.isArray(backend.nativeEpsgs) && backend.nativeEpsgs.length
+          ? backend.nativeEpsgs.join(", ")
+          : "—";
+        document.getElementById("index-source").textContent = backend.indexSource || "—";
         document.getElementById("numprocs-input").value = config.mapserverNumprocs ?? "";
         document.getElementById("numprocs-input").max = config.maxMapserverNumprocs ?? 32;
         document.getElementById("numprocs-input").disabled = !config.writeEnabled;
         document.getElementById("numprocs-write-status").textContent = config.writeEnabled ? "enabled" : "disabled";
         document.getElementById("gdal-cachemax-input").value = config.gdalCacheMaxMb ?? 128;
         document.getElementById("vsi-cache-input").value = config.vsiCacheSizeMb ?? 32;
-        document.getElementById("imagery-min-zoom-input").value = config.imageryMinZoom ?? 18;
-        document.getElementById("imagery-min-zoom-display").textContent = config.imageryMinZoom ?? "—";
         document.getElementById("mapserver-debug-input").checked = Boolean(config.mapserverDebug);
         document.getElementById("gdal-cachemax-input").disabled = !config.writeEnabled;
         document.getElementById("vsi-cache-input").disabled = !config.writeEnabled;
-        document.getElementById("imagery-min-zoom-input").disabled = !config.writeEnabled;
         document.getElementById("mapserver-debug-input").disabled = !config.writeEnabled;
         document.getElementById("nginx-cache-max-size-input").value = parseInt(config.nginxCacheMaxSize ?? "20g", 10);
         setRadioValue("nginx-cache-ttl", config.nginxCacheTtl ?? "24h");
@@ -1071,6 +1015,8 @@
         document.getElementById("nginx-cache-max-size-input").disabled = !config.writeEnabled;
         setRadioDisabled("nginx-cache-ttl", !config.writeEnabled);
         setRadioDisabled("nginx-cache-404-ttl", !config.writeEnabled);
+        document.getElementById("nginx-workers").textContent = config.nginxWorkers ?? "—";
+        document.getElementById("nginx-cache-api-link").href = nginxCacheUrl;
         const staticCache = config.staticNginxCacheSettings || {};
         document.getElementById("nginx-cache-key").textContent = staticCache.cacheKey ?? "—";
         document.getElementById("nginx-cache-head").textContent = `proxy_cache_convert_head ${staticCache.proxyCacheConvertHead ?? "—"}`;
@@ -1079,38 +1025,11 @@
         document.getElementById("nginx-cache-upstream").textContent = staticCache.upstream ?? "—";
         refreshDirtyState();
 
-        const region = config.awsRegion || "us-west-2";
-        const pricing = {
-          "us-east-1": { alb: 16.42, fargate: 30.00, rds: 12.00 },
-          "us-east-2": { alb: 16.42, fargate: 30.00, rds: 12.00 },
-          "us-west-1": { alb: 19.56, fargate: 35.50, rds: 14.50 },
-          "us-west-2": { alb: 16.42, fargate: 30.00, rds: 12.00 },
-          "eu-central-1": { alb: 19.56, fargate: 35.50, rds: 13.50 },
-          "eu-west-1": { alb: 17.52, fargate: 33.00, rds: 12.50 },
-          "ap-southeast-2": { alb: 19.56, fargate: 35.50, rds: 14.50 },
-          "default": { alb: 18.00, fargate: 33.00, rds: 13.00 }
-        };
-        const regionPrices = pricing[region] || pricing["default"];
-        const total = regionPrices.alb + regionPrices.fargate + regionPrices.rds;
-
-        document.getElementById("cost-title").textContent = `AWS Cost Estimate (${region})`;
-        const elAlb = document.getElementById("cost-alb");
-        const elFargate = document.getElementById("cost-fargate");
-        const elRds = document.getElementById("cost-rds");
-        const elTotal = document.getElementById("cost-total");
-        const elParked = document.getElementById("cost-parked");
-        
-        if(elAlb) elAlb.textContent = `~$${regionPrices.alb.toFixed(2)}`;
-        if(elFargate) elFargate.textContent = `~$${regionPrices.fargate.toFixed(2)}`;
-        if(elRds) elRds.textContent = `~$${regionPrices.rds.toFixed(2)}`;
-        if(elTotal) elTotal.textContent = `~$${total.toFixed(2)} / mo`;
-        if(elParked) elParked.textContent = `~$${regionPrices.alb.toFixed(2)} / mo`;
-
       } catch (error) {
         document.getElementById("mapserver-workers").textContent = "unknown";
-        document.getElementById("fargate-cpu").textContent = "unknown";
-        document.getElementById("fargate-memory").textContent = "unknown";
-        document.getElementById("s3-signing").textContent = "unknown";
+        document.getElementById("mapserver-observed-workers").textContent = "unknown";
+        document.getElementById("index-backend").textContent = "unknown";
+        document.getElementById("nginx-workers").textContent = "unknown";
         document.getElementById("numprocs-write-status").textContent = "unknown";
         document.getElementById("cache-config-status").textContent = "unknown";
       }
@@ -1159,11 +1078,21 @@
         const actionCell = document.createElement("td");
         const actionButton = document.createElement("button");
         actionButton.type = "button";
-        actionButton.textContent = isActive ? "Active" : (collection.enabled ? "View" : "Disabled");
+        actionButton.textContent = isActive ? "Active" : (collection.enabled ? "Set active" : "Disabled");
         actionButton.disabled = isActive || !collection.enabled || !latestConfig.writeEnabled;
         actionButton.dataset.collectionName = collection.collectionName;
         actionButton.addEventListener("click", () => activateCollection(collection.collectionName));
         actionCell.appendChild(actionButton);
+
+        if (isActive) {
+          const viewerLink = document.createElement("a");
+          viewerLink.href = `${window.location.origin}/viewer/`;
+          viewerLink.target = "_blank";
+          viewerLink.rel = "noopener";
+          viewerLink.textContent = "Viewer";
+          viewerLink.style.marginLeft = "8px";
+          actionCell.appendChild(viewerLink);
+        }
         
         const deleteButton = document.createElement("button");
         deleteButton.type = "button";
@@ -1213,13 +1142,13 @@
         }
         renderCollections(result);
         await loadViewerConfig();
-        selectTab("visualize");
         logLine([
           `Active collection: ${collectionName}`,
+          `Viewer: ${window.location.origin}/viewer/`,
           `Viewer config: ${viewerConfigUrl}`,
           `Footprints: ${footprintUrl}`,
           "",
-          "Open the full viewer from the Visualize tab to inspect the selected collection.",
+          "Open Viewer from the Collections table to inspect the selected collection.",
         ]);
       } catch (error) {
         logLine([`Active collection update failed: ${error.message}`]);
@@ -1258,7 +1187,7 @@
 
     async function deleteCollection(collectionId) {
       if (!latestConfig.writeEnabled) {
-        showError("Admin writes are disabled. Cannot delete collection.");
+        logLine(["Admin writes are disabled. Cannot delete collection."]);
         return;
       }
       try {
@@ -1276,7 +1205,7 @@
         }
         await loadCollections();
       } catch (err) {
-        showError(`Failed to delete collection: ${err.message}`);
+        logLine([`Failed to delete collection: ${err.message}`]);
       }
     }
 
@@ -1310,10 +1239,12 @@
         access_mode:   document.getElementById("scan-access-mode").value,
         label:         document.getElementById("scan-label").value.trim() || undefined,
         attribution:   document.getElementById("scan-attribution").value.trim() || undefined,
-        min_zoom:      Number.parseInt(document.getElementById("scan-min-zoom").value, 10),
-        max_zoom:      Number.parseInt(document.getElementById("scan-max-zoom").value, 10),
         draw_order:    Number.parseInt(document.getElementById("scan-draw-order").value, 10),
       };
+      const minZoom = Number.parseInt(document.getElementById("scan-min-zoom").value, 10);
+      const maxZoom = Number.parseInt(document.getElementById("scan-max-zoom").value, 10);
+      if (Number.isFinite(minZoom)) payload.min_zoom = minZoom;
+      if (Number.isFinite(maxZoom)) payload.max_zoom = maxZoom;
       const limit = Number.parseInt(document.getElementById("scan-limit").value, 10);
       if (Number.isFinite(limit) && limit > 0) payload.limit = limit;
       if (payload.access_mode === "requester-pays") payload.requester_pays = true;
@@ -1496,7 +1427,6 @@
       return {
         gdalCacheMaxMb: Number.parseInt(document.getElementById("gdal-cachemax-input").value, 10),
         vsiCacheSizeMb: Number.parseInt(document.getElementById("vsi-cache-input").value, 10),
-        imageryMinZoom: Number.parseInt(document.getElementById("imagery-min-zoom-input").value, 10),
         mapserverDebug: document.getElementById("mapserver-debug-input").checked,
         nginxCacheMaxSizeGb: Number.parseInt(document.getElementById("nginx-cache-max-size-input").value, 10),
         nginxCacheTtl: getRadioValue("nginx-cache-ttl"),
@@ -1695,7 +1625,6 @@
       "numprocs-input",
       "gdal-cachemax-input",
       "vsi-cache-input",
-      "imagery-min-zoom-input",
       "mapserver-debug-input",
       "nginx-cache-max-size-input",
     ].forEach((id) => {
@@ -1709,7 +1638,6 @@
       button.addEventListener("click", () => selectTab(button.dataset.tab));
     });
     scanForm.addEventListener("submit", submitScan);
-    refreshLinks();
     loadConfig().then(() => {
       setScanFormEnabled(Boolean(latestConfig.writeEnabled));
       return loadCollections();
