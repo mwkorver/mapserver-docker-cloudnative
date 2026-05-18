@@ -56,6 +56,8 @@ def _metadata_token():
 def _load_credentials():
     if os.path.exists("/tmp/aws_credentials.json"):
         try:
+            if os.path.getsize("/tmp/aws_credentials.json") == 0:
+                raise RuntimeError("/tmp/aws_credentials.json is empty")
             with open("/tmp/aws_credentials.json", encoding="utf-8") as f:
                 data = json.load(f)
             expires_at = 0
@@ -152,9 +154,9 @@ def credentials():
             return None
 
 
-def _signing_key(secret_key, date_stamp):
+def _signing_key(secret_key, date_stamp, region):
     date_key = hmac.new(("AWS4" + secret_key).encode(), date_stamp.encode(), hashlib.sha256).digest()
-    region_key = hmac.new(date_key, S3_REGION.encode(), hashlib.sha256).digest()
+    region_key = hmac.new(date_key, region.encode(), hashlib.sha256).digest()
     service_key = hmac.new(region_key, SERVICE.encode(), hashlib.sha256).digest()
     return hmac.new(service_key, b"aws4_request", hashlib.sha256).digest()
 
@@ -173,9 +175,11 @@ def _canonical_uri(path):
     return "/" + "/".join(quote(segment, safe="-_.~") for segment in path.lstrip("/").split("/"))
 
 
-def signed_headers(method, path, query, range_header, extra_headers=None):
+def signed_headers(method, path, query, range_header, extra_headers=None, bucket=None, region=None):
+    bucket = bucket or S3_BUCKET
+    region = region or S3_REGION
     creds = credentials()
-    host = f"{S3_BUCKET}.s3.{S3_REGION}.amazonaws.com"
+    host = f"{bucket}.s3.{region}.amazonaws.com"
     headers = {
         "host": host,
         "x-amz-content-sha256": UNSIGNED_PAYLOAD,
@@ -191,7 +195,7 @@ def signed_headers(method, path, query, range_header, extra_headers=None):
     now = dt.datetime.now(dt.timezone.utc)
     amz_date = now.strftime("%Y%m%dT%H%M%SZ")
     date_stamp = now.strftime("%Y%m%d")
-    credential_scope = f"{date_stamp}/{S3_REGION}/{SERVICE}/aws4_request"
+    credential_scope = f"{date_stamp}/{region}/{SERVICE}/aws4_request"
 
     headers["x-amz-date"] = amz_date
     if creds.get("token"):
@@ -219,7 +223,7 @@ def signed_headers(method, path, query, range_header, extra_headers=None):
         ]
     )
     signature = hmac.new(
-        _signing_key(creds["secret_key"], date_stamp),
+        _signing_key(creds["secret_key"], date_stamp, region),
         string_to_sign.encode(),
         hashlib.sha256,
     ).hexdigest()
@@ -243,7 +247,6 @@ class S3ProxyHandler(BaseHTTPRequestHandler):
         self._proxy()
 
     def _proxy(self):
-        global S3_BUCKET, S3_REGION
         parsed = urlsplit(self.path)
         
         parts = parsed.path.lstrip("/").split("/", 3)
@@ -260,13 +263,15 @@ class S3ProxyHandler(BaseHTTPRequestHandler):
         range_header = self.headers.get("Range")
         extra = {"x-amz-request-payer": "requester"} if is_requester_pays else None
         
-        orig_bucket, orig_region = S3_BUCKET, S3_REGION
-        S3_BUCKET, S3_REGION = target_bucket, target_region
-        
-        try:
-            headers = signed_headers(self.command, upstream_path, parsed.query, range_header, extra)
-        finally:
-            S3_BUCKET, S3_REGION = orig_bucket, orig_region
+        headers = signed_headers(
+            self.command,
+            upstream_path,
+            parsed.query,
+            range_header,
+            extra,
+            bucket=target_bucket,
+            region=target_region,
+        )
 
         connection = http.client.HTTPSConnection(
             f"{target_bucket}.s3.{target_region}.amazonaws.com",
