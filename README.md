@@ -28,24 +28,37 @@ The same container also runs locally (`docker run`) for inspection and developme
 1. **Deploy the stack** — `cdk deploy` provisions Fargate, ALB, RDS, log group, IAM, etc.
 2. **Open the admin UI** at `<alb>/admin/` and use the **Add a Collection** form to point at any bucket+prefix of COGs.
 3. The container's `scan_cog_collection.py` walks the bucket, reads each COG's header in parallel via GDAL, computes a per-COG bounding box, and writes:
-   - A **native-CRS GeoJSON tile index** (used by MapServer's raster `TILEINDEX` to pick which COGs intersect a request bbox)
+   - A **native-CRS [FlatGeobuf](https://flatgeobuf.org/) tile index** (used by MapServer's raster `TILEINDEX` to pick which COGs intersect a request bbox; R-tree indexed for fast spatial lookup)
    - A **Web Mercator GeoJSON footprints file** (used by the viewer's footprint overlay and OGC API Features)
-   - An entry in `mapfiles/collections.json` capturing the collection's id, label, bounds, COG count, CRS, etc.
-4. `mapfile_generator.py` reads `collections.json` and emits the MapServer `mapfile.map`. nginx fronts FastCGI mapserv and a shared range-cache that sits in front of a local SigV4 signer — the signer uses the Fargate task's IAM role to sign requests to private (and requester-pays) buckets transparently.
-5. WMS requests render COG tiles through that stack: `/mapserv?...&LAYERS={collection_id}&BBOX=...`.
+   - On AWS, the same features are also **bulk-inserted into a PostGIS `cog_index` table** keyed by `collection_id`. MapServer reads from PostGIS in deployed mode and from FGB in local mode.
+   - An entry in `mapfiles/collections.json` capturing the collection's id, label, bounds, COG count, CRS, etc. Scanner-time fields include `tileindex`, `tileindexes[]` (per-EPSG when a collection straddles multiple source CRSs), `raster_processing` (per-collection PROCESSING overrides for e.g. 16-bit imagery), and auto-derived zoom range.
+4. `mapfile_generator.py` reads `collections.json` and emits the MapServer `mapfile.map`. Backend is automatic — POSTGIS when `DB_HOST` is set and `collection.postgis=true`, OGR (FGB / GeoJSON) otherwise. nginx fronts FastCGI mapserv and a shared range-cache that sits in front of a local SigV4 signer — the signer uses the Fargate task's IAM role to sign requests to private (and requester-pays) buckets transparently.
+5. WMS requests render COG tiles through that stack: `/mapserv?...&LAYERS={layer_name}&BBOX=...`.
 
 ---
 
-## Where the GeoJSON files come from
+## Where the index files come from
 
-Tile indexes and footprints live as GeoJSON files at `/usr/src/mapfiles/`. These are populated two ways:
+Two artifacts per collection live at `/usr/src/mapfiles/`:
+
+| File | Format | Used by |
+|---|---|---|
+| `<id>_tileindex.fgb` (or `<id>_tileindex_<epsg>.fgb` per group) | **FlatGeobuf** (R-tree indexed binary) | MapServer raster `TILEINDEX` — local mode only |
+| `<id>_footprints_3857.geojson` | **GeoJSON** | Browser fetches it directly for the Leaflet overlay; OGC API Features serves it |
+
+These are populated two ways:
 
 | When | Source |
 |---|---|
-| **Bundled samples** (KY 20×20 preview, NJ 2020) | Shipped in the image. Useful for first-run / docker-run-locally exploration without scanning anything. |
-| **Live deployment** | The admin UI's scan flow writes them. The scanner output and `collections.json` are the single source of truth for what the deployed WMS serves. |
+| **Bundled samples** (KY 20×20 preview, NJ 2020) | Shipped in the image. Useful for first-run / `docker run` exploration without scanning anything. |
+| **Live deployment** | The admin UI's scan flow writes them. The scanner output and `collections.json` (synced to `s3://<config-bucket>/config/`) are the single source of truth for what the deployed WMS serves. |
 
-A separate PostGIS-backed mode exists (the `postgis: true` per-collection flag) for very large collections where in-memory GeoJSON scanning becomes the bottleneck. By default everything is GeoJSON/OGR-backed — simpler, smaller surface area, and tens of thousands of features render fine that way.
+**Backend selection is automatic:**
+
+- **Local mode** (no `DB_HOST` set): MapServer reads tile indexes from the FGB files. FlatGeobuf has a packed Hilbert R-tree built in, so bbox queries on tens of thousands of features stay fast without spinning up a database.
+- **AWS mode** (`DB_HOST` set by the CDK stack): the scanner also bulk-inserts into a PostGIS `cog_index` table keyed by `collection_id`. MapServer reads from PostGIS exclusively; the FGB files are still produced for cross-checking but not used for serving.
+
+Why both? Local mode has no DB to manage and stays portable. AWS mode benefits from PostGIS's concurrent-write tolerance and integration with future pgstac use; the durable collection catalog on S3 also means Fargate task replacement doesn't lose state.
 
 ---
 
@@ -126,7 +139,7 @@ docker run -d --name mapserver --rm -p 8080:80 \
 
 Open:
 - `http://localhost:8080/viewer/` — Leaflet map
-- `http://localhost:8080/admin/` — Collections / Runtime / Cache / Visualize / Benchmark tabs
+- `http://localhost:8080/admin/` — Collections / Runtime / Cache / Benchmark tabs (with live worker counts and an active-backend chip showing "FlatGeobuf" or "PostGIS")
 
 > **SSO/STS token expiry**: temporary credentials live ~1 hour. For longer local sessions, run [`scripts/auto_refresh_credentials.sh`](scripts/auto_refresh_credentials.sh) in the background — it re-exports fresh creds into the container's `/tmp/aws_credentials.json` every 15 minutes, which the in-container SigV4 signer picks up automatically.
 
@@ -135,31 +148,36 @@ Open:
 ## Architecture detail
 
 ```
-                   ┌─────────────────────────────────────────────────────────┐
-                   │  Fargate task                                           │
-                   │                                                         │
-  Browser ─► ALB ──┼──► nginx :80 ─┬─► mapserv FastCGI ──► mapfile.map      │
-                   │               │                       (generated from   │
-                   │               │                        collections.json)│
-                   │               ├─► /admin/  (HTML)                       │
-                   │               ├─► /viewer/ (HTML)                       │
-                   │               └─► /admin/api/* ──► admin_api.py :9100   │
-                   │                                                         │
-                   │   mapserv ─► GDAL /vsicurl/http://localhost:8001/...    │
-                   │                                       │                 │
-                   │                          nginx :8001  ▼                 │
-                   │                          (range-cache, 4 GB on disk)    │
-                   │                                       │ on miss         │
-                   │                                       ▼                 │
-                   │                          s3_sigv4_proxy.py :9000        │
-                   │                          (signs with task IAM role)     │
-                   └───────────────────────────────────────┼─────────────────┘
-                                                           │
-                                                       Any S3 bucket
-                                                       the task can read
+                  ┌──────────────────────────────────────────────────────────┐
+                  │  Fargate task (4 vCPU / 8 GB ARM64)                      │
+                  │                                                          │
+ Browser ─► ALB ──┼──► nginx :80 ─┬─► mapserv FastCGI ──► mapfile.map        │
+                  │               │                       (generated from    │
+                  │               │                        collections.json) │
+                  │               ├─► /admin/  (HTML)                        │
+                  │               ├─► /viewer/ (HTML)                        │
+                  │               └─► /admin/api/* ──► admin_api.py :9100 ───┼──► s3://…/config/collections.json
+                  │                                                          │     (durable catalog;
+                  │   mapserv ─► PostGIS cog_index ──► RDS PostgreSQL ───────┼──►   pulled at boot,
+                  │            (tileindex layer)         (+ PostGIS, pgstac) │      synced on every
+                  │                                                          │      admin mutation)
+                  │   mapserv ─► GDAL /vsicurl/http://localhost:8001/...     │
+                  │                                       │                  │
+                  │                          nginx :8001  ▼                  │
+                  │                          (range-cache, 4 GB on disk)     │
+                  │                                       │ on miss          │
+                  │                                       ▼                  │
+                  │                          s3_sigv4_proxy.py :9000         │
+                  │                          (signs with task IAM role)      │
+                  └───────────────────────────────────────┼──────────────────┘
+                                                          │
+                                                      Any S3 bucket
+                                                      the task can read
 ```
 
-Two layers of caching: nginx range-cache (shared across all FastCGI workers, persistent on the task) and GDAL's per-worker VSI cache. The SigV4 proxy handles signed and requester-pays buckets without GDAL having to know IAM details.
+Two layers of caching: nginx range-cache (shared across all FastCGI workers, persistent on the task) and GDAL's per-worker VSI cache. The SigV4 proxy handles signed and requester-pays buckets — including buckets in regions other than the task's — without GDAL having to know IAM details.
+
+In local mode (no RDS), MapServer reads tile indexes from FGB files instead of PostGIS; everything else in the diagram is the same.
 
 ---
 
