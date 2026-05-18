@@ -40,9 +40,13 @@ docker tag mapserver-docker-cloudnative:latest \
 docker push <acct>.dkr.ecr.us-west-2.amazonaws.com/mapserver-docker-cloudnative:latest
 ```
 
-The container generates `mapfile.map` from `collections.json` at startup, so
-no S3 upload of config files is required. (Optional escape hatch:
-`MAPFILE_S3_URI` will download a hand-written mapfile if set.)
+The deployed container loads `config/collections.json` from the config bucket
+at startup, then generates `mapfile.map` from that catalog. If the S3 object is
+missing, the image's bundled `mapfiles/collections.json` is used as a first-run
+seed. Admin collection scans/enable/delete operations write the updated catalog
+back to `s3://<config-bucket>/config/collections.json` so Fargate task
+replacement does not lose collection metadata. Optional escape hatch:
+`MAPFILE_S3_URI` will download a hand-written mapfile if set.
 
 ## Deploy
 
@@ -68,6 +72,22 @@ cdk deploy \
   -c ecr_repo=my-mapserver \
   -c image_tag=v1.2.0
 ```
+
+## Budget guardrail
+
+The stack tags its resources with `Project=mapserver-docker-cloudnative`.
+To add a monthly AWS Budgets alert filtered to that tag:
+
+```bash
+cdk deploy \
+  -c monthly_budget_usd=50 \
+  -c budget_email=you@example.com
+```
+
+This is intentionally an AWS Budgets resource, not a CloudWatch billing alarm:
+CloudWatch billing metrics are account/service level, while Budgets can filter
+by cost allocation tag. New accounts may need to activate the `Project` cost
+allocation tag in Billing before tag-filtered budget reports are complete.
 
 ## Park to save cost
 
