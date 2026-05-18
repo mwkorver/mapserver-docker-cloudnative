@@ -27,6 +27,12 @@
 
     #toolbar label { color: #444; white-space: nowrap; }
 
+    #collection-label {
+      color: #222;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
     #wms-url {
       width: 320px;
       padding: 4px 8px;
@@ -142,6 +148,20 @@
     }
     #perf-header button:hover { background: #f0f0f0; }
 
+    .viewer-links {
+      display: grid;
+      grid-template-columns: 110px 1fr;
+      gap: 6px 10px;
+      line-height: 1.4;
+    }
+    .viewer-links .label { color: #666; }
+    .viewer-links a {
+      color: #2266cc;
+      overflow-wrap: anywhere;
+      text-decoration: none;
+    }
+    .viewer-links a:hover { text-decoration: underline; }
+
     #perf-body {
       padding: 12px 14px;
       overflow-y: auto;
@@ -201,6 +221,7 @@
 </head>
 <body>
   <div id="toolbar">
+    <span id="collection-label">Loading collection…</span>
     <label>WMS URL:</label>
     <input id="wms-url" type="text" />
     <button id="apply-btn">Apply</button>
@@ -229,13 +250,23 @@
         <h4>Recent server requests</h4>
         <div id="recent-requests" class="empty">—</div>
       </div>
+      <div class="perf-section">
+        <h4>Viewer links</h4>
+        <div class="viewer-links">
+          <div class="label">Layer</div><div id="viewer-layer-name">—</div>
+          <div class="label">MapServer</div><div><a id="mapserv-link" href="/mapserv" target="_blank" rel="noopener">/mapserv</a></div>
+          <div class="label">Capabilities</div><div><a id="capabilities-link" href="/mapserv?SERVICE=WMS&amp;VERSION=1.3.0&amp;REQUEST=GetCapabilities" target="_blank" rel="noopener">GetCapabilities</a></div>
+          <div class="label">Config</div><div><a id="viewer-config-link" href="/viewer/config.json" target="_blank" rel="noopener">/viewer/config.json</a></div>
+          <div class="label">Footprints</div><div><a id="footprints-link" href="/viewer/footprints" target="_blank" rel="noopener">current bbox</a></div>
+        </div>
+      </div>
     </div>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
     if (window.location.protocol === 'file:') {
-      window.location.replace('http://localhost:8081/viewer/');
+      window.location.replace('http://localhost:8080/viewer/');
     }
 
     const PERF_API_URL = '';
@@ -256,16 +287,39 @@
 
     const VIEWER_CONFIG = loadViewerConfig();
     const IMAGERY_MIN_ZOOM = VIEWER_CONFIG.imageryMinZoom || 18;
+    const IMAGERY_MAX_ZOOM = VIEWER_CONFIG.imageryMaxZoom || Math.max(22, IMAGERY_MIN_ZOOM + 1);
+    const NATIVE_ZOOM = VIEWER_CONFIG.nativeZoom || IMAGERY_MIN_ZOOM + 4;
     const COG_LABEL_MIN_ZOOM = 15;
-    const FOOTPRINT_RENDER_LIMIT = 2000;
+    const FOOTPRINT_RENDER_LIMIT = 50000;
     const FOOTPRINT_LABEL_LIMIT = 500;
     const WMS_LAYER_NAME = VIEWER_CONFIG.layerName || 'ky-2024';
+    const WMS_LAYER_NAMES = Array.isArray(VIEWER_CONFIG.layerNames) && VIEWER_CONFIG.layerNames.length
+      ? VIEWER_CONFIG.layerNames
+      : [WMS_LAYER_NAME];
     const MAP_NAME = VIEWER_CONFIG.mapName || 'ky-imagery';
     const FOOTPRINT_API_URL = VIEWER_CONFIG.footprintApiUrl || '/viewer/footprints';
     const ATTRIBUTION = VIEWER_CONFIG.attribution || 'Imagery collection';
     const DEFAULT_WMS_URL = window.location.origin + '/mapserv';
-    const DEFAULT_VIEW = { center: VIEWER_CONFIG.center || [37.937085, -85.372578], zoom: IMAGERY_MIN_ZOOM - 1 };
-    const map = L.map('map', { maxZoom: 22 }).setView(DEFAULT_VIEW.center, DEFAULT_VIEW.zoom);
+    const CAPABILITIES_URL = `${DEFAULT_WMS_URL}?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetCapabilities`;
+    const DEFAULT_VIEW = { center: VIEWER_CONFIG.center || [37.937085, -85.372578], zoom: NATIVE_ZOOM - 1 };
+    const map = L.map('map', { maxZoom: IMAGERY_MAX_ZOOM }).setView(DEFAULT_VIEW.center, DEFAULT_VIEW.zoom);
+
+    function setViewerLink(id, href, label) {
+      const link = document.getElementById(id);
+      link.href = href;
+      if (label) link.textContent = label;
+    }
+
+    function refreshViewerLinks() {
+      const bbox = currentViewBounds(true).map(value => value.toFixed(2)).join(',');
+      const footprintsUrl = `${window.location.origin}${FOOTPRINT_API_URL}?bbox=${encodeURIComponent(bbox)}&limit=${FOOTPRINT_RENDER_LIMIT}`;
+      document.getElementById('collection-label').textContent = VIEWER_CONFIG.collectionName || WMS_LAYER_NAME;
+      document.getElementById('viewer-layer-name').textContent = WMS_LAYER_NAMES.join(', ');
+      setViewerLink('mapserv-link', DEFAULT_WMS_URL, '/mapserv');
+      setViewerLink('capabilities-link', CAPABILITIES_URL, 'GetCapabilities');
+      setViewerLink('viewer-config-link', `${window.location.origin}/viewer/config.json`, '/viewer/config.json');
+      setViewerLink('footprints-link', footprintsUrl, 'current bbox');
+    }
 
     const LayerInfoControl = L.Control.extend({
       options: { position: 'topright' },
@@ -286,7 +340,7 @@
         } else {
           this._div.innerHTML =
             '<div class="layer-row"><span class="swatch" style="background:#e06020;opacity:0.6;border:1px solid #e06020"></span>COG Footprints' + countStr + '</div>' +
-            '<div class="layer-row"><span class="swatch" style="background:#4a9eff"></span>WMS: ' + WMS_LAYER_NAME + '</div>' +
+            '<div class="layer-row"><span class="swatch" style="background:#4a9eff"></span>WMS: ' + WMS_LAYER_NAMES.join(', ') + '</div>' +
             '<div class="layer-row" style="color:#888;padding-left:18px;font-size:11px">zoom: ' + zoom + '</div>';
         }
       }
@@ -396,6 +450,7 @@
     function fetchFootprints() {
       const bbox = currentViewBounds(true).map(value => value.toFixed(2)).join(',');
       const url = `${FOOTPRINT_API_URL}?bbox=${encodeURIComponent(bbox)}&limit=${FOOTPRINT_RENDER_LIMIT}`;
+      refreshViewerLinks();
       const requestId = ++footprintRequestId;
       fetch(url)
         .then(r => {
@@ -447,6 +502,26 @@
       return coords.z + '/' + coords.x + '/' + coords.y;
     }
 
+    function isOverNativeZoom(coords) {
+      return coords && coords.z > NATIVE_ZOOM;
+    }
+
+    function tileLabelText(coords, value) {
+      if (isOverNativeZoom(coords)) {
+        const overBy = coords.z - NATIVE_ZOOM;
+        const prefix = `z${coords.z} over +${overBy}`;
+        return value ? `${prefix}\n${value}` : prefix;
+      }
+      return value || 'loading…';
+    }
+
+    function setTileTimeLabel(coords, value) {
+      const key = tileKey(coords);
+      tileTimeValues.set(key, value);
+      const label = tileTimeCells.get(key);
+      if (label) label.textContent = tileLabelText(coords, value);
+    }
+
     function formatTileTime(ms) {
       return ms >= 1000 ? (ms / 1000).toFixed(2) + ' s' : Math.round(ms) + ' ms';
     }
@@ -457,7 +532,7 @@
         tile.className = 'tile-time-cell';
         const label = document.createElement('div');
         label.className = 'tile-time-label';
-        label.textContent = tileTimeValues.get(tileKey(coords)) || 'loading…';
+        label.textContent = tileLabelText(coords, tileTimeValues.get(tileKey(coords)));
         tile.appendChild(label);
         return tile;
       }
@@ -466,7 +541,7 @@
     function buildTileTimeLayer() {
       return new TileTimeLayer({
         minZoom: IMAGERY_MIN_ZOOM,
-        maxZoom: 22,
+        maxZoom: IMAGERY_MAX_ZOOM,
         tileSize: 256,
         pane: 'markerPane'
       }).on('tileunload', (e) => {
@@ -475,18 +550,18 @@
         const key = tileKey(e.coords);
         const label = e.tile.querySelector('.tile-time-label');
         tileTimeCells.set(key, label);
-        label.textContent = tileTimeValues.get(key) || 'loading…';
+        label.textContent = tileLabelText(e.coords, tileTimeValues.get(key));
       });
     }
 
     function buildWmsLayer(url) {
       const layer = L.tileLayer.wms(url, {
-        layers: WMS_LAYER_NAME,
+        layers: WMS_LAYER_NAMES.join(','),
         format: 'image/png',
         transparent: false,
         version: '1.3.0',
         minZoom: IMAGERY_MIN_ZOOM,
-        maxZoom: 22,
+        maxZoom: IMAGERY_MAX_ZOOM,
         keepBuffer: 1,
         updateWhenIdle: true,
         updateWhenZooming: false,
@@ -494,29 +569,20 @@
       });
       layer.on('tileloadstart', (e) => {
         tileTimers.set(e.tile, performance.now());
-        const key = tileKey(e.coords);
-        tileTimeValues.set(key, 'loading…');
-        const label = tileTimeCells.get(key);
-        if (label) label.textContent = 'loading…';
+        setTileTimeLabel(e.coords, 'loading…');
       });
       layer.on('tileload', (e) => {
         const start = tileTimers.get(e.tile);
         if (start === undefined) return;
         const ms = performance.now() - start;
         const text = formatTileTime(ms);
-        const key = tileKey(e.coords);
-        tileTimeValues.set(key, text);
-        const label = tileTimeCells.get(key);
-        if (label) label.textContent = text;
+        setTileTimeLabel(e.coords, text);
         clientSamples.push(ms);
         if (clientSamples.length > 100) clientSamples.shift();
         renderClientStats();
       });
       layer.on('tileerror', (e) => {
-        const key = tileKey(e.coords);
-        tileTimeValues.set(key, 'error');
-        const label = tileTimeCells.get(key);
-        if (label) label.textContent = 'error';
+        setTileTimeLabel(e.coords, 'error');
       });
       return layer;
     }

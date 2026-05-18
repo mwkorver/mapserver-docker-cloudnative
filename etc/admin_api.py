@@ -7,6 +7,7 @@ import os
 import random
 import re
 import subprocess
+import sys
 import threading
 import time
 import urllib.request
@@ -14,6 +15,11 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+
+try:
+    import psycopg2
+except ImportError:
+    psycopg2 = None
 
 
 SUPERVISOR_CONF = Path("/etc/supervisor/conf.d/supervisord.conf")
@@ -60,7 +66,7 @@ FALLBACK_VIEWER_CONFIG = {
     "attribution": "",
 }
 FOOTPRINT_LIMIT_DEFAULT = 2000
-FOOTPRINT_LIMIT_MAX = 10000
+FOOTPRINT_LIMIT_MAX = 50000
 _FOOTPRINT_CACHE: dict[str, dict] = {}
 
 
@@ -113,6 +119,7 @@ def _collection_to_ui(collection):
     return {
         "collectionName": collection.get("id"),
         "layerName": collection.get("layer_name") or collection.get("id"),
+        "layerNames": collection.get("layer_names") or [collection.get("layer_name") or collection.get("id")],
         "enabled": bool(collection.get("enabled", True)),
         "minZoom": collection.get("min_zoom"),
         "maxZoom": collection.get("max_zoom"),
@@ -156,6 +163,41 @@ def _public_footprint_url(collection):
     return f"/mapfiles/{basename}"
 
 
+def _collection_artifact_paths(collection):
+    """Generated local files owned by a collection scan.
+
+    Deletes are intentionally limited to /usr/src/mapfiles artifacts so an
+    accidental absolute path in collections.json cannot remove arbitrary
+    container files.
+    """
+    paths = []
+    for key in ["tileindex", "tileindex_geojson", "footprints_geojson", "inventory_fgb"]:
+        value = collection.get(key)
+        if value:
+            paths.append(Path(value))
+    for item in collection.get("tileindexes") or []:
+        value = item.get("tileindex")
+        if value:
+            paths.append(Path(value))
+
+    seen = set()
+    safe_paths = []
+    mapfiles_root = MAPFILES_DIR.resolve()
+    for path in paths:
+        try:
+            resolved = path.resolve()
+        except OSError:
+            continue
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if resolved == mapfiles_root or mapfiles_root not in resolved.parents:
+            print(f"WARN: refusing to delete collection artifact outside {mapfiles_root}: {resolved}", file=sys.stderr)
+            continue
+        safe_paths.append(resolved)
+    return safe_paths
+
+
 def _collection_to_viewer(collection):
     """Convert a collections.json entry to the viewer's expected shape."""
     bbox = collection.get("bbox_4326")
@@ -163,11 +205,13 @@ def _collection_to_viewer(collection):
         "collectionName": collection.get("id"),
         "mapName": collection.get("map_name") or "imagery",
         "layerName": collection.get("layer_name") or collection.get("id"),
+        "layerNames": collection.get("layer_names") or [collection.get("layer_name") or collection.get("id")],
         "footprintUrl": _public_footprint_url(collection),
         "footprintApiUrl": "/viewer/footprints",
         "bounds": _bounds_from_bbox_4326(bbox) or FALLBACK_VIEWER_CONFIG["bounds"],
         "center": _center_from_bbox_4326(bbox) or FALLBACK_VIEWER_CONFIG["center"],
         "imageryMinZoom": collection.get("min_zoom") or 14,
+        "imageryMaxZoom": collection.get("max_zoom"),
         "nativeZoom": collection.get("native_zoom", 18),
         "attribution": collection.get("attribution", ""),
     }
@@ -292,6 +336,53 @@ def current_numprocs():
     if not match:
         raise RuntimeError("numprocs not found in supervisor config")
     return int(match.group(1))
+
+
+def observed_process_counts():
+    try:
+        ps = subprocess.run(
+            ["ps", "-eo", "comm,args"],
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+    except OSError:
+        return {"mapserverWorkers": None, "nginxWorkers": None}
+
+    mapserver_workers = 0
+    nginx_workers = 0
+    for line in ps.stdout.splitlines():
+        if "mapserv" in line:
+            mapserver_workers += 1
+        if "nginx: worker process" in line:
+            nginx_workers += 1
+    return {"mapserverWorkers": mapserver_workers, "nginxWorkers": nginx_workers}
+
+
+def active_backend_summary():
+    doc = _read_collections()
+    active = _active_collection(doc.get("collections", []))
+    if active is None:
+        return {
+            "activeCollection": "",
+            "backend": "none",
+            "cogCount": 0,
+            "nativeEpsgs": [],
+            "indexSource": "",
+        }
+    db_enabled = bool(db_connection_string()) and bool(active.get("postgis", False))
+    tileindexes = active.get("tileindexes") or []
+    index_source = "cog_index" if db_enabled else (
+        ", ".join(Path(item.get("tileindex", "")).name for item in tileindexes if item.get("tileindex"))
+        or Path(active.get("tileindex") or active.get("tileindex_geojson") or "").name
+    )
+    return {
+        "activeCollection": active.get("id", ""),
+        "backend": "PostGIS" if db_enabled else "FlatGeobuf",
+        "cogCount": active.get("cog_count", 0),
+        "nativeEpsgs": active.get("native_epsgs") or ([active.get("native_epsg")] if active.get("native_epsg") else []),
+        "indexSource": index_source,
+    }
 
 
 def runtime_config():
@@ -474,8 +565,12 @@ def nginx_cache_stats():
 
 def admin_config():
     runtime = runtime_config()
+    processes = observed_process_counts()
+    backend = active_backend_summary()
     config = {
         "mapserverNumprocs": current_numprocs(),
+        **processes,
+        "indexBackend": backend,
         "maxMapserverNumprocs": MAX_WORKERS,
         "writeEnabled": write_enabled(),
         "fargateCpu": os.environ.get("FARGATE_CPU", "4096"),
@@ -537,14 +632,8 @@ def collections_config():
     for c in collections:
         ui_collections.append(_collection_to_ui(c))
 
-    # Sort: active first, then enabled, then by draw_order for stable display.
-    def _sort_key(item):
-        return (
-            0 if item["collectionName"] == active_id else 1,
-            0 if item["enabled"] else 1,
-            item.get("drawOrder", 10),
-        )
-    ui_collections.sort(key=_sort_key)
+    # Preserve collections.json order. The active row should not jump when
+    # selected; only the active marker and Viewer link should move.
 
     return {"activeCollection": active_id, "collections": ui_collections}
 
@@ -555,13 +644,7 @@ def viewer_config():
     active = _active_collection(doc.get("collections", []))
     if active is None:
         return dict(FALLBACK_VIEWER_CONFIG)
-    config = _collection_to_viewer(active)
-    # Runtime override: admin UI can adjust imageryMinZoom for testing
-    # without re-scanning the collection.
-    runtime = runtime_config()
-    if "imageryMinZoom" in runtime and runtime["imageryMinZoom"]:
-        config["imageryMinZoom"] = runtime["imageryMinZoom"]
-    return config
+    return _collection_to_viewer(active)
 
 
 def set_active_collection(collection_id):
@@ -599,6 +682,7 @@ def set_collection_enabled(collection_id, enabled):
     target["enabled"] = new_value
     doc["collections"] = collections
     COLLECTIONS_FILE.write_text(json.dumps(doc, indent=2) + "\n")
+    catalog_sync = sync_collections_catalog()
 
     # If we disabled the active collection, clear runtime.activeCollection
     # so _active_collection() falls back to the first remaining enabled one.
@@ -617,6 +701,7 @@ def set_collection_enabled(collection_id, enabled):
         **collections_config(),
         "collectionId": collection_id,
         "enabled": new_value,
+        "catalogSync": catalog_sync,
         "mapfile": regen_output,
         "mapserverRestart": restart_result,
     }
@@ -667,14 +752,52 @@ def set_numprocs(value):
 # COG scan jobs
 # ----------------------------------------------------------------------
 # Scans are spawned as subprocess threads; state lives in _JOBS guarded by
-# _JOBS_LOCK. State is in-memory (lost on container restart) — acceptable
-# for now since the artifacts (geojson + collections.json) are durable.
+# _JOBS_LOCK. Job progress is intentionally in-memory and lost on container
+# restart. Collection metadata is synced to S3 when COLLECTIONS_S3_URI is set.
 
 _JOBS: dict[str, dict] = {}
 _JOBS_LOCK = threading.Lock()
 _COLLECTION_ID_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 _DISCOVERED_RE = re.compile(r"Discovered (\d+) GeoTIFFs")
 _PROGRESS_RE = re.compile(r"Scanned (\d+)/(\d+); failures=(\d+)")
+
+
+def db_connection_string():
+    host = os.environ.get("DB_HOST")
+    user = os.environ.get("DB_USER")
+    if not (host and user):
+        return None
+    return (
+        f"host={host} "
+        f"port={os.environ.get('DB_PORT', '5432')} "
+        f"dbname={os.environ.get('DB_NAME', 'mapserver')} "
+        f"user={user} "
+        f"password={os.environ.get('DB_PASS') or os.environ.get('DB_PASSWORD', '')}"
+    )
+
+
+def delete_postgis_collection(collection_id):
+    db_conn = db_connection_string()
+    if not db_conn:
+        return 0
+    if psycopg2 is None:
+        raise RuntimeError("psycopg2 not installed; cannot delete PostGIS rows")
+
+    with psycopg2.connect(db_conn) as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM cog_index WHERE collection_id = %s", (collection_id,))
+            return cur.rowcount
+
+
+def delete_collection_jobs(collection_id):
+    with _JOBS_LOCK:
+        deleted_job_ids = [
+            job_id for job_id, job in _JOBS.items()
+            if job.get("collection_id") == collection_id and job.get("status") != "running"
+        ]
+        for job_id in deleted_job_ids:
+            _JOBS.pop(job_id, None)
+    return deleted_job_ids
 
 
 def now_iso():
@@ -690,6 +813,30 @@ def regenerate_mapfile():
     if result.returncode != 0:
         raise RuntimeError(f"mapfile_generator failed: {result.stderr or result.stdout}")
     return result.stderr.strip() or result.stdout.strip()
+
+
+def sync_collections_catalog():
+    """Upload collections.json to durable S3 storage when configured.
+
+    Local development leaves COLLECTIONS_S3_URI unset, so scans and admin
+    edits behave exactly as before. Deployed Fargate tasks set it because the
+    container filesystem is ephemeral across task replacement.
+    """
+    uri = os.environ.get("COLLECTIONS_S3_URI")
+    if not uri:
+        return {"enabled": False}
+    result = subprocess.run(
+        ["aws", "s3", "cp", str(COLLECTIONS_FILE), uri],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "collections catalog S3 sync failed: "
+            + (result.stderr or result.stdout or f"aws exited {result.returncode}")
+        )
+    return {"enabled": True, "uri": uri, "output": (result.stdout or result.stderr).strip()}
 
 
 def _validate_scan_payload(payload):
@@ -755,12 +902,14 @@ def _run_scan(job_id, payload):
         "--attribution", payload.get("attribution", ""),
         "--layer-name", payload.get("layer_name", collection_id),
         "--map-name", payload.get("map_name", f"{collection_id}-imagery"),
-        "--min-zoom", str(payload.get("min_zoom", 14)),
-        "--max-zoom", str(payload.get("max_zoom", 22)),
         "--draw-order", str(payload.get("draw_order", 10)),
         "--access-mode", payload.get("access_mode", "unsigned"),
         "--enabled", "true" if payload.get("enabled", True) else "false",
     ]
+    if payload.get("min_zoom") is not None:
+        cmd += ["--min-zoom", str(int(payload["min_zoom"]))]
+    if payload.get("max_zoom") is not None:
+        cmd += ["--max-zoom", str(int(payload["max_zoom"]))]
     if payload.get("limit"):
         cmd += ["--limit", str(int(payload["limit"]))]
     if payload.get("workers"):
@@ -802,6 +951,15 @@ def _run_scan(job_id, payload):
             job["log_tail"].append(f"mapfile_generator: {gen_output}")
     except Exception as exc:
         _set_job_failed(job, f"mapfile regeneration failed: {exc}")
+        return
+
+    try:
+        sync_result = sync_collections_catalog()
+        if sync_result.get("enabled"):
+            with _JOBS_LOCK:
+                job["log_tail"].append(f"collections sync: {sync_result['uri']}")
+    except Exception as exc:
+        _set_job_failed(job, f"collections catalog sync failed: {exc}")
         return
 
     try:
@@ -1048,27 +1206,39 @@ class Handler(BaseHTTPRequestHandler):
                     
             if not target:
                 raise ValueError(f"Collection {collection_id} not found")
-                
+
+            deleted_postgis_rows = delete_postgis_collection(collection_id)
+
             docs["collections"] = collections
             COLLECTIONS_FILE.write_text(json.dumps(docs, indent=2) + "\n")
+            catalog_sync = sync_collections_catalog()
             
             rt_config = runtime_config()
             if rt_config.get("activeCollection") == collection_id:
                 rt_config["activeCollection"] = ""
                 save_runtime_config(rt_config)
             
-            for key in ["tileindex", "tileindex_geojson", "footprints_geojson"]:
-                fpath = target.get(key)
-                if fpath:
-                    try:
-                        Path(fpath).unlink(missing_ok=True)
-                    except Exception as exc:
-                        print(f"WARN: failed to delete {fpath}: {exc}", file=sys.stderr)
-                        
+            deleted_artifacts = []
+            for artifact_path in _collection_artifact_paths(target):
+                try:
+                    artifact_path.unlink(missing_ok=True)
+                    deleted_artifacts.append(str(artifact_path))
+                except Exception as exc:
+                    print(f"WARN: failed to delete {artifact_path}: {exc}", file=sys.stderr)
+
+            deleted_jobs = delete_collection_jobs(collection_id)
+            _FOOTPRINT_CACHE.clear()
+
             regenerate_mapfile()
             restart_mapserver_group()
             
-            write_json(self, 200, collections_config())
+            write_json(self, 200, {
+                **collections_config(),
+                "deletedArtifacts": deleted_artifacts,
+                "deletedJobs": deleted_jobs,
+                "deletedPostgisRows": deleted_postgis_rows,
+                "catalogSync": catalog_sync,
+            })
         except ValueError as exc:
             write_error(self, 400, str(exc))
         except Exception as exc:
