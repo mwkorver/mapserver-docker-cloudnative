@@ -28,8 +28,7 @@ EXTENSIONS = [
 ]
 
 SCHEMA = """
-DROP TABLE IF EXISTS cog_index CASCADE;
-CREATE TABLE cog_index (
+CREATE TABLE IF NOT EXISTS cog_index (
     id            BIGSERIAL PRIMARY KEY,
     collection_id TEXT NOT NULL,
     location      TEXT NOT NULL,
@@ -41,10 +40,10 @@ CREATE TABLE cog_index (
     UNIQUE (collection_id, location)
 );
 
-CREATE INDEX cog_index_collection_idx  ON cog_index(collection_id);
-CREATE INDEX cog_index_geom_idx        ON cog_index USING GIST(geom);
-CREATE INDEX cog_index_geom_native_idx ON cog_index USING GIST(geom_native);
-CREATE INDEX cog_index_file_name_trgm  ON cog_index USING GIN(file_name gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS cog_index_collection_idx  ON cog_index(collection_id);
+CREATE INDEX IF NOT EXISTS cog_index_geom_idx        ON cog_index USING GIST(geom);
+CREATE INDEX IF NOT EXISTS cog_index_geom_native_idx ON cog_index USING GIST(geom_native);
+CREATE INDEX IF NOT EXISTS cog_index_file_name_trgm  ON cog_index USING GIN(file_name gin_trgm_ops);
 """
 
 
