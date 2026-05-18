@@ -31,7 +31,13 @@ DEFAULT_EXTENT_3857 = [-14000000, 2500000, -7000000, 6000000]  # roughly contine
 
 
 def db_connection_string():
-    """PostGIS connection string from env, or None if DB not configured."""
+    """PostGIS connection string from env, or None if DB not configured.
+
+    Accepts either DB_PASS or DB_PASSWORD. The CDK stack passes DB_PASSWORD
+    (matching the AWS Secrets Manager schema), while local dev / earlier
+    versions used DB_PASS — honor both to avoid silent unauthenticated
+    connections.
+    """
     host = os.environ.get("DB_HOST")
     user = os.environ.get("DB_USER")
     if not (host and user):
@@ -41,7 +47,7 @@ def db_connection_string():
         f"port={os.environ.get('DB_PORT', '5432')} "
         f"dbname={os.environ.get('DB_NAME', 'mapserver')} "
         f"user={user} "
-        f"password={os.environ.get('DB_PASS', '')}"
+        f"password={os.environ.get('DB_PASS') or os.environ.get('DB_PASSWORD', '')}"
     )
 
 
@@ -178,9 +184,39 @@ def footprints_layer(c, db_conn):
 
 
 def tileindex_layer(c, db_conn):
+    return tileindex_layer_for_group(c, db_conn, None)
+
+
+def tileindex_groups(c):
+    groups = c.get("tileindexes")
+    if groups:
+        return groups
+    return [{
+        "epsg": c["native_epsg"],
+        "tileindex": c.get("tileindex") or c.get("tileindex_geojson"),
+        "tileindex_layer_name": c.get("tileindex_layer_name"),
+        "layer_name": c.get("layer_name") or c.get("id"),
+        "extent_native": c.get("extent_native"),
+    }]
+
+
+def tileindex_map_layer_name(c, group):
+    # Only suffix the internal polygon-layer name with EPSG when a single
+    # collection has multiple source-CRS groups. Keeps the common
+    # single-CRS case stable for any debugging that references the
+    # cog-tileindex-* layer by name.
+    if group is None:
+        return f'cog-tileindex-{c["id"]}'
+    if len(tileindex_groups(c)) > 1:
+        return f'cog-tileindex-{c["id"]}-{group["epsg"]}'
+    return f'cog-tileindex-{c["id"]}'
+
+
+def tileindex_layer_for_group(c, db_conn, group):
     cid = c["id"]
-    epsg = c["native_epsg"]
-    extent = c.get("extent_native") or [0, 0, 1000000, 1000000]
+    group = group or tileindex_groups(c)[0]
+    epsg = group["epsg"]
+    extent = group.get("extent_native") or c.get("extent_native") or [0, 0, 1000000, 1000000]
     use_postgis = bool(db_conn) and c.get("postgis", False)
     if use_postgis:
         # cog_index.geom_native is generic GEOMETRY; per-row SRID is set by
@@ -192,11 +228,8 @@ def tileindex_layer(c, db_conn):
             f'    DATA "geom_native FROM (SELECT id,location,geom_native FROM cog_index WHERE collection_id=\'{cid}\') AS sub USING UNIQUE id USING SRID={epsg}"',
         ]
     else:
-        # Tile index file (FGB preferred; legacy field name kept for
-        # forward compatibility with collections.json files written by
-        # older scanners).
-        tileindex = c.get("tileindex") or c.get("tileindex_geojson")
-        layer_name = ogr_layer_name(tileindex)
+        tileindex = group.get("tileindex") or c.get("tileindex") or c.get("tileindex_geojson")
+        layer_name = group.get("tileindex_layer_name") or c.get("tileindex_layer_name") or ogr_layer_name(tileindex)
         conn_block = [
             '    CONNECTIONTYPE OGR',
             f'    CONNECTION "{tileindex}"',
@@ -205,7 +238,7 @@ def tileindex_layer(c, db_conn):
     return [
         '',
         '  LAYER',
-        f'    NAME "cog-tileindex-{cid}"',
+        f'    NAME "{tileindex_map_layer_name(c, group)}"',
         '    TYPE POLYGON',
         '    STATUS OFF',
         f'    EXTENT {extent[0]} {extent[1]} {extent[2]} {extent[3]}',
@@ -218,18 +251,27 @@ def tileindex_layer(c, db_conn):
 
 
 def raster_layer(c):
+    return raster_layer_for_group(c, tileindex_groups(c)[0])
+
+
+def raster_layer_for_group(c, group):
+    processing = c.get("raster_processing") or [
+        "BANDS=1,2,3",
+        "RESAMPLE=AVERAGE",
+    ]
+    processing_lines = [f'    PROCESSING "{item}"' for item in processing]
+    layer_name = group.get("layer_name") or c.get("layer_name") or c["id"]
     return [
         '',
         '  LAYER',
-        f'    NAME "{c["layer_name"]}"',
+        f'    NAME "{layer_name}"',
         '    TYPE RASTER',
         '    STATUS ON',
-        f'    TILEINDEX "cog-tileindex-{c["id"]}"',
+        f'    TILEINDEX "{tileindex_map_layer_name(c, group)}"',
         '    TILEITEM "location"',
-        '    PROCESSING "BANDS=1,2,3"',
-        '    PROCESSING "RESAMPLE=AVERAGE"',
+        *processing_lines,
         '    PROJECTION',
-        f'      "init=epsg:{c["native_epsg"]}"',
+        f'      "init=epsg:{group["epsg"]}"',
         '    END',
         '    METADATA',
         f'      "ows_title"       "{c["label"]}"',
@@ -251,13 +293,15 @@ def main():
     backend = "postgis+ogr" if db_conn else "ogr-only"
 
     extent = union_extent(enabled, "extent_3857", DEFAULT_EXTENT_3857)
-    srs_set = sorted({3857, 4326} | {c["native_epsg"] for c in enabled})
+    native_srs = {group["epsg"] for c in enabled for group in tileindex_groups(c)}
+    srs_set = sorted({3857, 4326} | native_srs)
 
     lines = header(extent, srs_set)
     for c in enabled:
         lines += footprints_layer(c, db_conn)
-        lines += tileindex_layer(c, db_conn)
-        lines += raster_layer(c)
+        for group in tileindex_groups(c):
+            lines += tileindex_layer_for_group(c, db_conn, group)
+            lines += raster_layer_for_group(c, group)
     lines += ['', 'END', '']
 
     OUTPUT_PATH.write_text("\n".join(lines))
