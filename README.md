@@ -1,6 +1,6 @@
 # mapserver-docker-cloudnative
 
-> Based on the original work by [pedros007](https://github.com/pedros007/mapserver-docker). Thanks to Pedro for laying the foundation.
+> Based on the original work by [pedros007](https://github.com/pedros007/mapserver-docker). Thanks to Pete Schmitt for laying the foundation.
 
 A cloud-native MapServer deployment for serving Cloud Optimized GeoTIFFs (COGs) from AWS S3 over WMS / OGC API. Built to run on **AWS Fargate** (ARM64/Graviton) behind an ALB, provisioned end-to-end by a single `cdk deploy`.
 
