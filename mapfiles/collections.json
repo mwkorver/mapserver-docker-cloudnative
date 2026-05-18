@@ -42,7 +42,8 @@
       "postgis": false,
       "indexed_at": "2026-05-01T00:00:00Z",
       "native_zoom": 18,
-      "tileindex": "/usr/src/mapfiles/ky_20x20_tileindex_3089.fgb"
+      "tileindex": "/usr/src/mapfiles/ky_20x20_tileindex_3089.fgb",
+      "tileindex_layer_name": "ky_20x20_tileindex_3089"
     },
     {
       "id": "nj-2020-1ft",
@@ -50,7 +51,7 @@
       "map_name": "nj-imagery",
       "label": "New Jersey 2020 1-foot Imagery",
       "attribution": "NJ Office of GIS / NJGIN",
-      "enabled": false,
+      "enabled": true,
       "min_zoom": 14,
       "max_zoom": 22,
       "draw_order": 10,
@@ -84,7 +85,14 @@
       "footprints_geojson": "/usr/src/mapfiles/nj_2020_footprints_3857.geojson",
       "postgis": false,
       "indexed_at": "2026-05-12T00:00:00Z",
-      "tileindex": "/usr/src/mapfiles/nj_2020_tileindex_6527.fgb"
+      "tileindex": "/usr/src/mapfiles/nj_2020_tileindex_6527.fgb",
+      "tileindex_layer_name": "nj-2020-1ft_tileindex_6527",
+      "raster_processing": [
+        "BANDS=1,2,3",
+        "USE_MASK_BAND=NO",
+        "SCALE=0,65535",
+        "RESAMPLE=AVERAGE"
+      ]
     },
     {
       "id": "ky-2024-season13in",
@@ -126,7 +134,8 @@
       "footprints_geojson": "/usr/src/mapfiles/ky-2024-season13in_footprints_3857.geojson",
       "postgis": false,
       "indexed_at": "2026-05-14T18:26:49Z",
-      "tileindex": "/usr/src/mapfiles/ky-2024-season13in_tileindex.fgb"
+      "tileindex": "/usr/src/mapfiles/ky-2024-season13in_tileindex.fgb",
+      "tileindex_layer_name": "ky-2024-season13in_tileindex_3089"
     }
   ]
 }
