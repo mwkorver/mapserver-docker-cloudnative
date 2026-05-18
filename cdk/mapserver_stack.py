@@ -3,8 +3,10 @@ from aws_cdk import (
     Duration,
     CfnOutput,
     RemovalPolicy,
+    Tags,
     BundlingOptions,
     CustomResource,
+    aws_budgets as budgets,
     aws_ec2 as ec2,
     aws_ecs as ecs,
     aws_ecr as ecr,
@@ -55,6 +57,77 @@ class MapserverStack(Stack):
         parked_ctx = self.node.try_get_context("parked")
         parked = str(parked_ctx).lower() in ("true", "1", "yes")
         mapserver_numprocs = str(self.node.try_get_context("mapserver_numprocs") or "6")
+        cost_tag_key = "Project"
+        cost_tag_value = "mapserver-docker-cloudnative"
+        Tags.of(self).add(cost_tag_key, cost_tag_value)
+        Tags.of(self).add("awsApplication", construct_id)
+
+        monthly_budget_usd = float(self.node.try_get_context("monthly_budget_usd") or 0)
+        budget_email = self.node.try_get_context("budget_email")
+        if monthly_budget_usd > 0 and budget_email:
+            budgets.CfnBudget(
+                self,
+                "StackMonthlyBudget",
+                budget=budgets.CfnBudget.BudgetDataProperty(
+                    budget_name=f"{construct_id}-monthly",
+                    budget_type="COST",
+                    time_unit="MONTHLY",
+                    budget_limit=budgets.CfnBudget.SpendProperty(
+                        amount=monthly_budget_usd,
+                        unit="USD",
+                    ),
+                    cost_types=budgets.CfnBudget.CostTypesProperty(
+                        include_credit=False,
+                        include_discount=True,
+                        include_other_subscription=True,
+                        include_recurring=True,
+                        include_refund=False,
+                        include_subscription=True,
+                        include_support=True,
+                        include_tax=True,
+                        include_upfront=True,
+                        use_amortized=False,
+                        use_blended=False,
+                    ),
+                    filter_expression=budgets.CfnBudget.ExpressionProperty(
+                        tags=budgets.CfnBudget.TagValuesProperty(
+                            key=cost_tag_key,
+                            match_options=["EQUALS"],
+                            values=[cost_tag_value],
+                        ),
+                    ),
+                ),
+                notifications_with_subscribers=[
+                    budgets.CfnBudget.NotificationWithSubscribersProperty(
+                        notification=budgets.CfnBudget.NotificationProperty(
+                            comparison_operator="GREATER_THAN",
+                            notification_type="ACTUAL",
+                            threshold=80,
+                            threshold_type="PERCENTAGE",
+                        ),
+                        subscribers=[
+                            budgets.CfnBudget.SubscriberProperty(
+                                address=str(budget_email),
+                                subscription_type="EMAIL",
+                            )
+                        ],
+                    ),
+                    budgets.CfnBudget.NotificationWithSubscribersProperty(
+                        notification=budgets.CfnBudget.NotificationProperty(
+                            comparison_operator="GREATER_THAN",
+                            notification_type="FORECASTED",
+                            threshold=100,
+                            threshold_type="PERCENTAGE",
+                        ),
+                        subscribers=[
+                            budgets.CfnBudget.SubscriberProperty(
+                                address=str(budget_email),
+                                subscription_type="EMAIL",
+                            )
+                        ],
+                    ),
+                ],
+            )
 
         # --- Networking ----------------------------------------------------
         vpc = ec2.Vpc(
@@ -261,11 +334,12 @@ class MapserverStack(Stack):
             ),
         )
 
-        # Task role: read-only S3 for config and imagery, plus read the DB secret.
+        # Task role: read/write S3 for durable config, read-only imagery,
+        # plus read the DB secret.
         # GDAL still reads /vsicurl/http://localhost:8001/...; nginx handles
         # range-aware cache lookup, then the local signer uses this task role
         # only on cache misses against private S3.
-        config_bucket.grant_read(task_def.task_role)
+        config_bucket.grant_read_write(task_def.task_role, "config/*")
         imagery_bucket.grant_read(task_def.task_role, "imagery/*")
         db.secret.grant_read(task_def.task_role)
 
@@ -277,11 +351,13 @@ class MapserverStack(Stack):
             ),
             environment={
                 # No MAPFILE_S3_URI: mapfile is derived at startup from the
-                # bundled collections.json by /etc/mapfile_generator.py.
-                # collections.json is the source of truth; the legacy
-                # "download a hand-written mapfile from S3" path is opt-in.
+                # collections.json loaded from S3 by /etc/entrypoint.sh.
+                # S3 is the durable source of truth; bundled collections.json
+                # is only a first-run seed when config/collections.json is
+                # not present yet.
                 "DB_SECRET_ARN": db.secret.secret_arn,
                 "AWS_REGION": self.region,
+                "COLLECTIONS_S3_URI": f"s3://{config_bucket_name}/config/collections.json",
                 "S3_BUCKET": "kyfromabove",
                 "S3_REGION": self.region,
                 "S3_SIGNING": "required",
