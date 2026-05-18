@@ -14,6 +14,7 @@ import json
 import math
 import os
 import re
+import shutil
 import sys
 import time
 import urllib.parse
@@ -34,6 +35,50 @@ except ImportError:
 NS = {"s3": "http://s3.amazonaws.com/doc/2006-03-01/"}
 WEB_MERCATOR_EPSG = 3857
 WGS84_EPSG = 4326
+
+
+def load_signer_credentials(bucket, region):
+    """Return credentials from the shared SigV4 helper, or None.
+
+    The scanner lists signed buckets through the same helper used by the
+    nginx proxy, but GDAL /vsis3 does not know about that helper or the
+    container's /tmp/aws_credentials.json file. For signed/requester-pays
+    scans, copy the resolved temporary credentials into GDAL config options
+    before worker threads call gdal.OpenEx().
+    """
+    sys.path.append("/etc")
+    try:
+        import s3_sigv4_proxy
+    except ImportError:
+        return None
+
+    s3_sigv4_proxy.S3_BUCKET = bucket
+    s3_sigv4_proxy.S3_REGION = region
+    return s3_sigv4_proxy.credentials()
+
+
+def configure_gdal_s3_credentials(access_mode, requester_pays, bucket, region):
+    gdal.SetConfigOption("AWS_REGION", region)
+    if access_mode == "unsigned":
+        gdal.SetConfigOption("AWS_NO_SIGN_REQUEST", "YES")
+        return
+
+    if requester_pays:
+        gdal.SetConfigOption("AWS_REQUEST_PAYER", "requester")
+
+    creds = load_signer_credentials(bucket, region)
+    if not creds:
+        raise RuntimeError(
+            "Signed S3 scan requested, but no AWS credentials are available. "
+            "Run scripts/auto_refresh_credentials.sh or set AWS_ACCESS_KEY_ID/"
+            "AWS_SECRET_ACCESS_KEY/AWS_SESSION_TOKEN in the container."
+        )
+
+    gdal.SetConfigOption("AWS_NO_SIGN_REQUEST", "NO")
+    gdal.SetConfigOption("AWS_ACCESS_KEY_ID", creds["access_key"])
+    gdal.SetConfigOption("AWS_SECRET_ACCESS_KEY", creds["secret_key"])
+    if creds.get("token"):
+        gdal.SetConfigOption("AWS_SESSION_TOKEN", creds["token"])
 COLLECTIONS_SCHEMA_VERSION = 1
 
 
@@ -64,8 +109,10 @@ def parse_args():
                         help="MapServer LAYER name (default: derived from --collection)")
     parser.add_argument("--map-name", default=None,
                         help="MapServer MAP/alias name for OGC API (default: '<id>-imagery')")
-    parser.add_argument("--min-zoom", type=int, default=14)
-    parser.add_argument("--max-zoom", type=int, default=22)
+    parser.add_argument("--min-zoom", type=int, default=None,
+                        help="Minimum viewer zoom; default is detected native_zoom - 4")
+    parser.add_argument("--max-zoom", type=int, default=None,
+                        help="Maximum viewer zoom; default is detected native_zoom + 1")
     parser.add_argument("--draw-order", type=int, default=10)
     parser.add_argument("--enabled", default="true",
                         choices=["true", "false"])
@@ -80,18 +127,21 @@ def s3_endpoint(bucket, region):
     return f"https://{bucket}.s3.{region}.amazonaws.com/"
 
 
-def list_tiffs(bucket, prefix, region, limit, requester_pays):
+def list_tiffs(bucket, prefix, region, limit, access_mode, requester_pays):
     endpoint = s3_endpoint(bucket, region)
     token = None
     keys = []
 
-    sys.path.append("/etc")
-    try:
-        import s3_sigv4_proxy
-        s3_sigv4_proxy.S3_BUCKET = bucket
-        s3_sigv4_proxy.S3_REGION = region
-    except ImportError:
-        s3_sigv4_proxy = None
+    s3_sigv4_proxy = None
+    should_sign = access_mode in ("signed", "requester-pays")
+    if should_sign:
+        sys.path.append("/etc")
+        try:
+            import s3_sigv4_proxy
+            s3_sigv4_proxy.S3_BUCKET = bucket
+            s3_sigv4_proxy.S3_REGION = region
+        except ImportError:
+            s3_sigv4_proxy = None
 
     while True:
         params = {
@@ -106,7 +156,7 @@ def list_tiffs(bucket, prefix, region, limit, requester_pays):
         url = endpoint + "?" + query
         
         headers = {}
-        if s3_sigv4_proxy:
+        if should_sign and s3_sigv4_proxy:
             extra = {"x-amz-request-payer": "requester"} if requester_pays else None
             headers = s3_sigv4_proxy.signed_headers("GET", "/", query, None, extra)
 
@@ -302,7 +352,59 @@ def write_tileindex_fgb(path, layer_name, epsg, features):
     finally:
         ds = None  # close (flushes index)
 
-    tmp.replace(out)
+    if out.exists():
+        if out.is_dir():
+            shutil.rmtree(out)
+        else:
+            out.unlink()
+    if tmp.is_dir():
+        inner_files = list(tmp.glob("*.fgb"))
+        if len(inner_files) != 1:
+            raise RuntimeError(f"Expected one FlatGeobuf file in {tmp}, found {len(inner_files)}")
+        inner_files[0].replace(out)
+        shutil.rmtree(tmp)
+    else:
+        tmp.replace(out)
+
+
+def feature_with_geometry(feature, geometry):
+    copied = {
+        "type": "Feature",
+        "properties": dict(feature["properties"]),
+        "geometry": geometry,
+    }
+    return copied
+
+
+def group_features_by_epsg(native_features, web_features):
+    native_by_epsg = {}
+    web_by_epsg = {}
+    for feature in native_features:
+        epsg = feature["properties"].get("epsg")
+        native_by_epsg.setdefault(epsg, []).append(feature)
+    for feature in web_features:
+        epsg = feature["properties"].get("epsg")
+        web_by_epsg.setdefault(epsg, []).append(feature)
+    return native_by_epsg, web_by_epsg
+
+
+def inventory_features_4326(web_features):
+    srs_3857 = osr.SpatialReference()
+    srs_3857.ImportFromEPSG(WEB_MERCATOR_EPSG)
+    srs_3857.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+    srs_4326 = osr.SpatialReference()
+    srs_4326.ImportFromEPSG(WGS84_EPSG)
+    srs_4326.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+    transform = osr.CoordinateTransformation(srs_3857, srs_4326)
+
+    features = []
+    for feature in web_features:
+        ring_4326 = []
+        for x, y in feature["geometry"]["coordinates"][0]:
+            lon, lat, _ = transform.TransformPoint(float(x), float(y))
+            ring_4326.append([lon, lat])
+        features.append(feature_with_geometry(feature, {"type": "Polygon", "coordinates": [ring_4326]}))
+    return features
 
 
 def features_bbox(features):
@@ -477,15 +579,15 @@ def main():
         
     requester_pays = args.access_mode == "requester-pays" or args.requester_pays
     
-    gdal.SetConfigOption("AWS_REGION", args.region)
-    if args.access_mode == "unsigned":
-        gdal.SetConfigOption("AWS_NO_SIGN_REQUEST", "YES")
-    elif requester_pays:
-        gdal.SetConfigOption("AWS_REQUEST_PAYER", "requester")
-        gdal.SetConfigOption("AWS_NO_SIGN_REQUEST", "NO")
+    configure_gdal_s3_credentials(
+        args.access_mode,
+        requester_pays,
+        args.bucket,
+        args.region,
+    )
         
     started = time.time()
-    keys = list_tiffs(args.bucket, args.prefix, args.region, args.limit, requester_pays)
+    keys = list_tiffs(args.bucket, args.prefix, args.region, args.limit, args.access_mode, requester_pays)
     print(f"Discovered {len(keys)} GeoTIFFs under s3://{args.bucket}/{args.prefix}", flush=True)
     if not keys:
         raise SystemExit("No GeoTIFFs found")
@@ -568,26 +670,45 @@ def main():
                 f["properties"]["epsg"] = inferred
         epsg_values = {inferred}
 
-    if len(epsg_values) != 1:
-        counts = {}
-        for f in native_features:
-            e = f["properties"].get("epsg")
-            counts[e] = counts.get(e, 0) + 1
-        breakdown = ", ".join(f"EPSG:{k or 'unknown'}={v}" for k, v in sorted(counts.items(), key=lambda x: -x[1]))
-        raise SystemExit(
-            f"Expected one source EPSG but found multiple: {breakdown}. "
-            f"Pass --source-epsg <code> to force a single value, or split into separate collections."
-        )
-    source_epsg = epsg_values.pop()
-
     native_features.sort(key=lambda feature: feature["properties"]["key"])
     web_features.sort(key=lambda feature: feature["properties"]["key"])
-    tileindex_layer_name = f"{args.collection}_tileindex_{source_epsg}"
-    write_tileindex_fgb(args.output_native, tileindex_layer_name, source_epsg, native_features)
+    native_by_epsg, web_by_epsg = group_features_by_epsg(native_features, web_features)
+    source_epsgs = sorted(epsg for epsg in native_by_epsg if epsg is not None)
+    if not source_epsgs:
+        raise SystemExit("No source EPSG values detected; pass --source-epsg <code> or inspect source CRS metadata.")
+
+    output_native = Path(args.output_native)
+    tileindexes = []
+    # Only suffix the WMS-visible LAYER name with EPSG when a single
+    # collection straddles multiple source CRSs. The common single-CRS case
+    # keeps the friendly name unchanged so external clients with hardcoded
+    # LAYERS=<id> URLs don't break.
+    multi_epsg = len(source_epsgs) > 1
+    base_layer_name = args.layer_name or slugify(args.collection)
+    for source_epsg in source_epsgs:
+        grouped_features = sorted(native_by_epsg[source_epsg], key=lambda feature: feature["properties"]["key"])
+        if len(source_epsgs) == 1:
+            tileindex_path = output_native
+        else:
+            tileindex_path = output_native.with_name(f"{output_native.stem}_{source_epsg}{output_native.suffix}")
+        tileindex_layer_name = f"{args.collection}_tileindex_{source_epsg}"
+        write_tileindex_fgb(tileindex_path, tileindex_layer_name, source_epsg, grouped_features)
+        tileindexes.append({
+            "epsg": int(source_epsg),
+            "tileindex": os.path.abspath(tileindex_path),
+            "tileindex_layer_name": tileindex_layer_name,
+            "layer_name": f"{base_layer_name}-{source_epsg}" if multi_epsg else base_layer_name,
+            "extent_native": round_bbox(features_bbox(grouped_features), 2),
+            "cog_count": len(grouped_features),
+        })
+
     write_geojson(args.output_web, f"{args.collection}_footprints_3857", WEB_MERCATOR_EPSG, web_features)
+    inventory_path = Path(args.output_web).with_name(f"{Path(args.output_web).stem.replace('_footprints_3857', '')}_inventory_4326.fgb")
+    write_tileindex_fgb(inventory_path, f"{args.collection}_inventory_4326", WGS84_EPSG, inventory_features_4326(web_features))
     elapsed = time.time() - started
     print(
-        f"Wrote {len(native_features)} features; source EPSG={source_epsg}; elapsed={elapsed:.1f}s",
+        f"Wrote {len(native_features)} features across {len(source_epsgs)} source EPSG group(s): "
+        f"{', '.join(str(epsg) for epsg in source_epsgs)}; elapsed={elapsed:.1f}s",
         flush=True,
     )
 
@@ -598,7 +719,7 @@ def main():
     postgis_loaded = False
     if os.environ.get("DB_HOST"):
         try:
-            n = load_into_postgis(args.collection, native_features, web_features, source_epsg)
+            n = load_into_postgis(args.collection, native_features, web_features, source_epsgs[0])
             postgis_loaded = True
             print(f"PostGIS: loaded {n} rows into cog_index for {args.collection}", flush=True)
         except Exception as exc:
@@ -630,16 +751,19 @@ def main():
             collection_native_zoom = int(round(median_nz))
         else:
             collection_native_zoom = 18
+        collection_min_zoom = args.min_zoom if args.min_zoom is not None else collection_native_zoom - 4
+        collection_max_zoom = args.max_zoom if args.max_zoom is not None else collection_native_zoom + 1
 
         entry = {
             "id": args.collection,
             "layer_name": layer_name,
+            "layer_names": [item["layer_name"] for item in tileindexes],
             "map_name": map_name,
             "label": label,
             "attribution": args.attribution,
             "enabled": args.enabled == "true",
-            "min_zoom": args.min_zoom,
-            "max_zoom": args.max_zoom,
+            "min_zoom": collection_min_zoom,
+            "max_zoom": collection_max_zoom,
             "native_zoom": collection_native_zoom,
             "draw_order": args.draw_order,
             "source": {
@@ -649,13 +773,17 @@ def main():
                 "access_mode": args.access_mode,
                 "requester_pays": bool(args.requester_pays),
             },
-            "native_epsg": int(source_epsg),
+            "native_epsg": int(source_epsgs[0]),
+            "native_epsgs": [int(epsg) for epsg in source_epsgs],
             "cog_count": len(native_features),
             "bbox_4326": bbox_4326,
             "extent_3857": extent_3857_int,
             "extent_native": extent_native,
-            "tileindex": os.path.abspath(args.output_native),
+            "tileindex": tileindexes[0]["tileindex"],
+            "tileindex_layer_name": tileindexes[0]["tileindex_layer_name"],
+            "tileindexes": tileindexes,
             "footprints_geojson": os.path.abspath(args.output_web),
+            "inventory_fgb": os.path.abspath(inventory_path),
             "postgis": postgis_loaded,
             "indexed_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
         }
