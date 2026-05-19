@@ -73,48 +73,70 @@ The intended path.
 - Node.js 20+ (for the CDK CLI; `npx aws-cdk` is fine)
 - Python 3.12+ (for the CDK app)
 
-### 1. Build and push the image to ECR
+### Step 1 — Create the long-lived resources
+
+These live outside the CDK stack so they survive a `cdk destroy`:
 
 ```bash
-aws ecr create-repository --repository-name mapserver-docker-cloudnative --region us-west-2
+export AWS_ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+export AWS_REGION=us-west-2
 
-aws ecr get-login-password --region us-west-2 \
-  | docker login --username AWS --password-stdin <account>.dkr.ecr.us-west-2.amazonaws.com
+aws ecr create-repository \
+  --repository-name mapserver-docker-cloudnative \
+  --region $AWS_REGION
 
-docker build --platform linux/arm64 \
-  -t <account>.dkr.ecr.us-west-2.amazonaws.com/mapserver-docker-cloudnative:latest .
-docker push <account>.dkr.ecr.us-west-2.amazonaws.com/mapserver-docker-cloudnative:latest
+aws s3 mb s3://mapserver-docker-cloudnative --region $AWS_REGION
 ```
 
-(or rely on the GitHub Actions workflow at [`.github/workflows/build-push.yml`](.github/workflows/build-push.yml) to do this for you on every push to `main`.)
+> **S3 bucket names are globally unique** across all AWS accounts. If `mapserver-docker-cloudnative` is taken, pick a unique name and pass it to CDK with `-c config_bucket=your-bucket-name`.
+> ECR repository names are per-account/per-region — no uniqueness concern there.
 
-### 2. Deploy the stack
+### Step 2 — Build and push the image to ECR
+
+```bash
+aws ecr get-login-password --region $AWS_REGION \
+  | docker login --username AWS --password-stdin \
+    $AWS_ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com
+
+docker buildx build --platform linux/arm64 \
+  -t $AWS_ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com/mapserver-docker-cloudnative:latest \
+  --push .
+```
+
+Or push to `main` and let GitHub Actions handle it — the workflow at [`.github/workflows/build-push.yml`](.github/workflows/build-push.yml) builds and pushes on every commit. It needs one repository variable (`AWS_ACCOUNT_ID`) and an IAM role (`github-actions-mapserver`) with an OIDC trust policy — see [`iam/trust-policy.json`](iam/trust-policy.json).
+
+### Step 3 — Deploy the CDK stack
 
 ```bash
 cd cdk
-python3 -m venv .venv && . .venv/bin/activate
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+
+export CDK_DEFAULT_ACCOUNT=$AWS_ACCOUNT
+export CDK_DEFAULT_REGION=$AWS_REGION
+
 npx aws-cdk bootstrap     # one-time per account/region
+npx aws-cdk diff          # preview what will be created
 npx aws-cdk deploy
 ```
 
-Deploy takes ~10 min (RDS provisioning is the long pole). Outputs include the ALB DNS, the WMS URL, the perf-API Lambda URL.
+Deploy takes ~10 min (RDS provisioning is the long pole). The stack outputs include the ALB DNS name and the full WMS URL.
 
-### 3. Add your data via the admin UI
+### Step 4 — Add your data via the admin UI
 
 Open `<alb-dns>/admin/` → **Collections** tab → **Add a collection** form. Bucket + prefix + access mode (unsigned / signed / requester-pays) is all you need. The form submits a background scan that runs through the container's IAM role; progress streams in via the **Active scans** panel. When the scan completes, a new layer appears in WMS and the viewer.
 
-### 4. Park or destroy
+### Step 5 — Park or destroy
 
 ```bash
-# Park (Fargate→0, RDS stopped) — saves cost, keeps state
-cdk deploy -c parked=true
+# Park (Fargate→0, RDS stopped) — saves cost, keeps state (~$16/mo for the ALB)
+npx aws-cdk deploy -c parked=true
 
-# Destroy — removes everything CDK-owned (S3/ECR persist)
-cdk destroy
+# Tear down everything CDK-owns (S3 bucket and ECR repo survive)
+npx aws-cdk destroy
 ```
 
-See [cdk/README.md](cdk/README.md) for parameterization details.
+See [cdk/README.md](cdk/README.md) for parameterization details (custom bucket name, image tag, budget alerts).
 
 ---
 
