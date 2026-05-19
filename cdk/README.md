@@ -48,11 +48,29 @@ Push an image so the service can start:
 aws ecr get-login-password --region $AWS_REGION | \
   docker login --username AWS --password-stdin \
     ${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com
+```
 
+The build command depends on your machine (Fargate is ARM64):
+
+**Windows or Intel Mac** — cross-compile to arm64 using buildx (included in Docker Desktop):
+```bash
 docker buildx build --platform linux/arm64 \
   -t ${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com/mapserver-docker-cloudnative:latest \
   --push .
 ```
+
+**Apple Silicon Mac (M1/M2/M3)** — your machine is already arm64, so no cross-compilation needed:
+```bash
+docker build \
+  -t ${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com/mapserver-docker-cloudnative:latest \
+  --push .
+```
+
+> If `docker buildx` or `--push` gives an "unknown flag" error on Mac, buildx isn't wired up as a Docker plugin. Fix it once with:
+> ```bash
+> mkdir -p ~/.docker/cli-plugins
+> ln -sfn $(brew --prefix)/opt/docker-buildx/bin/docker-buildx ~/.docker/cli-plugins/docker-buildx
+> ```
 
 The deployed container loads `config/collections.json` from the config bucket
 at startup, then generates `mapfile.map` from that catalog. If the S3 object is

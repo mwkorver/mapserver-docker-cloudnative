@@ -97,13 +97,31 @@ aws s3 mb s3://mapserver-docker-cloudnative-${AWS_ACCOUNT}-${AWS_REGION} --regio
 aws ecr get-login-password --region $AWS_REGION \
   | docker login --username AWS --password-stdin \
     $AWS_ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com
+```
 
+The build command depends on your machine:
+
+**Windows or Intel Mac** — cross-compile to arm64 using buildx (included in Docker Desktop):
+```bash
 docker buildx build --platform linux/arm64 \
   -t $AWS_ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com/mapserver-docker-cloudnative:latest \
   --push .
 ```
 
-Or push to `main` and let GitHub Actions handle it — the workflow at [`.github/workflows/build-push.yml`](.github/workflows/build-push.yml) builds and pushes on every commit. It needs one repository variable (`AWS_ACCOUNT_ID`) and an IAM role (`github-actions-mapserver`) with an OIDC trust policy — see [`iam/trust-policy.json`](iam/trust-policy.json).
+**Apple Silicon Mac (M1/M2/M3)** — your machine is already arm64, so no cross-compilation needed:
+```bash
+docker build \
+  -t $AWS_ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com/mapserver-docker-cloudnative:latest \
+  --push .
+```
+
+> If `docker buildx` or `--push` gives an "unknown flag" error on Mac, buildx isn't wired up as a Docker plugin. Fix it once with:
+> ```bash
+> mkdir -p ~/.docker/cli-plugins
+> ln -sfn $(brew --prefix)/opt/docker-buildx/bin/docker-buildx ~/.docker/cli-plugins/docker-buildx
+> ```
+
+Or skip the manual build entirely and push to `main` — the GitHub Actions workflow at [`.github/workflows/build-push.yml`](.github/workflows/build-push.yml) builds and pushes on every commit (x86 runners, so it always cross-compiles to arm64). It needs one repository variable (`AWS_ACCOUNT_ID`) and an IAM role (`github-actions-mapserver`) with an OIDC trust policy — see [`iam/trust-policy.json`](iam/trust-policy.json).
 
 ### Step 3 — Deploy the CDK stack
 
@@ -137,6 +155,53 @@ npx aws-cdk destroy
 ```
 
 See [cdk/README.md](cdk/README.md) for parameterization details (custom bucket name, image tag, budget alerts).
+
+### Changing Fargate CPU / memory from the AWS Console
+
+Fargate does not have an EC2-style instance type. The equivalent runtime shape is
+the task definition's **CPU** and **Memory** values. Changing those values creates
+a new ECS task definition revision and rolls the service to replacement tasks.
+Expect a short service rollout, usually a few minutes.
+
+The ALB does not change when you update the ECS service to a new task
+definition revision. The same `/admin/`, `/viewer/`, and `/mapserv` URLs keep
+working after the replacement task passes health checks. During rollout you may
+briefly see errors if no healthy task is available.
+
+AWS Console flow:
+
+1. Open **ECS** → **Task definitions**.
+2. Select the `mapserver` task definition family.
+3. Open the latest revision and choose **Create new revision**.
+4. Change **Task size**:
+   - CPU, for example `4096` = 4 vCPU
+   - Memory, for example `8192` = 8 GB
+5. Keep the container settings the same, then create the new revision.
+6. Open **ECS** → **Clusters** → `mapserver` → **Services** → `mapserver`.
+7. Choose **Update service**.
+8. Select the new task definition revision.
+9. Keep desired count unchanged and start the deployment.
+10. Watch the service events until the new task is healthy behind the ALB.
+
+After the new task is running, open `/admin/` → **Runtime** and check:
+
+- configured MapServer workers
+- observed MapServer worker processes
+- WMS GetCapabilities response time
+
+CPU/memory does not automatically change `MAPSERVER_NUMPROCS`. If you scale
+Fargate up, test whether increasing MapServer workers improves throughput. If
+you scale down, reduce workers if render latency or memory pressure gets worse.
+
+Console edits are useful for testing, but they create drift from CDK. A later
+`cdk deploy` can revert CPU/memory back to the values in CDK context. Once you
+find a good setting, encode it in CDK:
+
+```bash
+npx aws-cdk deploy \
+  -c mapserver_cpu=4096 \
+  -c mapserver_memory_limit_mib=8192
+```
 
 ---
 
