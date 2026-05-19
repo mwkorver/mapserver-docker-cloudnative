@@ -29,7 +29,8 @@ try:
     import psycopg2
     from psycopg2.extras import execute_values
 except ImportError:
-    psycopg2 = None  # OK in local mode; we only need it when DB_HOST is set.
+    psycopg2 = None         # OK in local mode; we only need it when DB_HOST is set.
+    execute_values = None   # Keeps the module attribute consistent for testing.
 
 
 NS = {"s3": "http://s3.amazonaws.com/doc/2006-03-01/"}
