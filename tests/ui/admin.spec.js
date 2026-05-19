@@ -9,8 +9,9 @@ test.describe("admin dashboard", () => {
   test("switches between all top-level tabs", async ({ page }) => {
     const expectedPanels = {
       Collections: "Collections",
-      Runtime: "Service Health",
-      Cache: "nginx Cache",
+      "MapServer/GDAL": "Service Health",
+      Environment: "Runtime Environment",
+      "Nginx Cache": "nginx Cache",
       Benchmark: "Benchmark",
     };
 
@@ -42,18 +43,20 @@ test.describe("admin dashboard", () => {
 
   test("keeps collection row order when active collection changes", async ({ page }) => {
     const rows = page.locator("#collections-body tr");
+    await expect(rows.first()).toBeVisible();
     const namesBefore = await rows.locator("td:first-child").allTextContents();
-    const targetRow = rows.filter({ hasText: "ky-2024-season13in" });
+    const targetButton = page.locator("#collections-body button", { hasText: "Set active" }).first();
+    const targetName = await targetButton.locator("xpath=ancestor::tr/td[1]").textContent();
 
-    await targetRow.getByRole("button", { name: "Set active" }).click();
-    await expect(targetRow.locator("a", { hasText: "Viewer" })).toHaveAttribute("href", /\/viewer\//);
+    await targetButton.click();
+    await expect(rows.filter({ hasText: targetName || "" }).locator("a", { hasText: "Viewer" })).toHaveAttribute("href", /\/viewer\//);
 
     const namesAfter = await rows.locator("td:first-child").allTextContents();
     expect(namesAfter).toEqual(namesBefore);
   });
 
   test("refreshes cache stats with visible feedback", async ({ page }) => {
-    await page.getByRole("tab", { name: "Cache" }).click();
+    await page.getByRole("tab", { name: "Nginx Cache" }).click();
 
     const previousRefresh = await page.locator("#nginx-cache-updated").textContent();
     await page.waitForTimeout(1100);
@@ -68,10 +71,11 @@ test.describe("admin dashboard", () => {
   });
 
   test("enables cache apply only after cache config changes", async ({ page }) => {
-    await page.getByRole("tab", { name: "Cache" }).click();
+    await page.getByRole("tab", { name: "Nginx Cache" }).click();
 
     const save = page.locator("#cache-config-save");
     const maxSize = page.locator("#nginx-cache-max-size-input");
+    await expect(maxSize).toBeEnabled();
     await expect(save).toBeDisabled();
 
     const currentValue = Number.parseInt(await maxSize.inputValue(), 10);
@@ -82,17 +86,17 @@ test.describe("admin dashboard", () => {
   });
 
   test("enables runtime apply only after tuning changes", async ({ page }) => {
-    await page.getByRole("tab", { name: "Runtime" }).click();
+    await page.getByRole("tab", { name: "MapServer/GDAL" }).click();
 
-    await expect(page.getByRole("heading", { name: "MapServer" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "MapServer", exact: true })).toBeVisible();
     await expect(page.getByRole("heading", { name: "GDAL Tuning" })).toBeVisible();
     await expect(page.locator("#capabilities-link")).toHaveAttribute("href", /GetCapabilities/);
     await expect(page.locator("#mapserver-observed-workers")).not.toHaveText("—");
-    await expect(page.locator("#index-backend")).not.toHaveText("—");
     await expect(page.getByRole("heading", { name: /AWS Cost/ })).toHaveCount(0);
 
     const save = page.locator("#runtime-save");
     const gdalCache = page.locator("#gdal-cachemax-input");
+    await expect(gdalCache).toBeEnabled();
     await expect(save).toBeDisabled();
 
     const currentValue = Number.parseInt(await gdalCache.inputValue(), 10);
@@ -100,5 +104,19 @@ test.describe("admin dashboard", () => {
 
     await expect(save).toBeEnabled();
     await expect(save).toHaveClass(/dirty/);
+  });
+
+  test("refreshes environment details on demand", async ({ page }) => {
+    await page.getByRole("tab", { name: "Environment" }).click();
+    await expect(page.locator("#env-mode")).not.toHaveText("—");
+
+    const previousRefresh = await page.locator("#environment-updated").textContent();
+    await page.waitForTimeout(1100);
+    await page.locator("#environment-refresh").click();
+
+    await expect(page.locator("#environment-updated")).not.toHaveText(previousRefresh);
+    await expect(page.locator("#env-mode")).not.toHaveText("—");
+    await expect(page.locator("#env-index-backend")).not.toHaveText("—");
+    await expect(page.getByRole("heading", { name: "Workers", exact: true })).toHaveCount(0);
   });
 });

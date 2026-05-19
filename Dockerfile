@@ -97,6 +97,7 @@ COPY mapfiles /usr/src/mapfiles
 COPY viewer /usr/src/viewer
 COPY admin /usr/src/admin
 COPY scripts /usr/src/scripts
+COPY benchmark /usr/src/benchmark
 
 EXPOSE 80
 
