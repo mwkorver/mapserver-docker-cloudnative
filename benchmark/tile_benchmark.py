@@ -294,7 +294,12 @@ def build_wms_url(layer, tile):
 
 def prepare_benchmark(payload, collection, viewer_config, db_connection_string=None):
     total_requests = int(payload.get("requests", 50))
-    zoom = int(payload["zoom"]) if "zoom" in payload else int(viewer_config.get("imageryMinZoom", 14))
+    # Native zoom is where MapServer reads full-resolution COG data (not overviews).
+    # imageryMinZoom is native_zoom - 4 — benchmarking there reads coarse overviews
+    # and gives misleadingly fast numbers. Fall back to native_zoom if zoom not given.
+    zoom = int(payload["zoom"]) if "zoom" in payload else int(
+        collection.get("native_zoom") or viewer_config.get("nativeZoom") or 18
+    )
     tiles, candidate_stats = generate_valid_tiles(collection, viewer_config, zoom, total_requests, db_connection_string)
     return {
         "tiles": tiles,
@@ -320,9 +325,14 @@ def run_benchmark(payload, collection, viewer_config, nginx_cache_path, db_conne
     layer = viewer_config.get("layerName", "imagery")
 
     if clear_cache:
+        # Delete contents only, not the directory itself — nginx owns the
+        # directory and will fail to write if we recreate it as a different user.
         cache_path = Path(nginx_cache_path)
-        shutil.rmtree(str(cache_path), ignore_errors=True)
-        cache_path.mkdir(parents=True, exist_ok=True)
+        for entry in cache_path.iterdir():
+            if entry.is_dir():
+                shutil.rmtree(str(entry), ignore_errors=True)
+            else:
+                entry.unlink(missing_ok=True)
 
     tiles = payload.get("preparedTiles")
     candidate_stats = payload.get("candidateStats")
