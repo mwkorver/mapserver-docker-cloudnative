@@ -6,10 +6,16 @@ from mapserver_stack import MapserverStack
 
 app = cdk.App()
 
-config_bucket = app.node.try_get_context("config_bucket") or "mapserver-docker-cloudnative"
+region = app.node.try_get_context("region") or os.environ.get("CDK_DEFAULT_REGION", "us-west-2")
+account = os.environ.get("CDK_DEFAULT_ACCOUNT", "")
+
+# Default bucket name is account+region namespaced so it is globally unique
+# without any manual -c config_bucket= override. S3 names are global; ECR
+# names (ecr_repo_name) are per-account/per-region and need no namespacing.
+default_bucket = f"mapserver-docker-cloudnative-{account}-{region}" if account else "mapserver-docker-cloudnative"
+config_bucket = app.node.try_get_context("config_bucket") or default_bucket
 ecr_repo_name = app.node.try_get_context("ecr_repo") or "mapserver-docker-cloudnative"
 image_tag = app.node.try_get_context("image_tag") or "latest"
-region = app.node.try_get_context("region") or os.environ.get("CDK_DEFAULT_REGION", "us-west-2")
 
 cpu = int(app.node.try_get_context("mapserver_cpu") or 4096)
 memory = int(app.node.try_get_context("mapserver_memory_limit_mib") or 8192)
