@@ -70,8 +70,7 @@ export CDK_DEFAULT_REGION=$AWS_REGION
 
 cdk bootstrap                        # one-time per account/region
 cdk diff                             # preview
-cdk deploy \
-  -c config_bucket=mapserver-docker-cloudnative-${AWS_ACCOUNT}-${AWS_REGION}
+cdk deploy
 ```
 
 Output `WmsUrl` is your endpoint:
