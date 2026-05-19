@@ -85,11 +85,11 @@ aws ecr create-repository \
   --repository-name mapserver-docker-cloudnative \
   --region $AWS_REGION
 
-aws s3 mb s3://mapserver-docker-cloudnative --region $AWS_REGION
+aws s3 mb s3://mapserver-docker-cloudnative-${AWS_ACCOUNT}-${AWS_REGION} --region $AWS_REGION
 ```
 
-> **S3 bucket names are globally unique** across all AWS accounts. If `mapserver-docker-cloudnative` is taken, pick a unique name and pass it to CDK with `-c config_bucket=your-bucket-name`.
-> ECR repository names are per-account/per-region — no uniqueness concern there.
+> ECR repository names are per-account/per-region — no uniqueness concern.
+> S3 bucket names are globally unique across all AWS accounts, so the bucket name above is namespaced with your account ID and region to guarantee it's available.
 
 ### Step 2 — Build and push the image to ECR
 
@@ -117,7 +117,8 @@ export CDK_DEFAULT_REGION=$AWS_REGION
 
 npx aws-cdk bootstrap     # one-time per account/region
 npx aws-cdk diff          # preview what will be created
-npx aws-cdk deploy
+npx aws-cdk deploy \
+  -c config_bucket=mapserver-docker-cloudnative-${AWS_ACCOUNT}-${AWS_REGION}
 ```
 
 Deploy takes ~10 min (RDS provisioning is the long pole). The stack outputs include the ALB DNS name and the full WMS URL.
