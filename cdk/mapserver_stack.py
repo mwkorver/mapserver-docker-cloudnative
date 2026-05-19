@@ -365,8 +365,9 @@ class MapserverStack(Stack):
                 # Allow admin UI writes in the deployed stack so the user can
                 # add collections via the web UI. Lock down later if exposed.
                 "ADMIN_WRITE_ENABLED": "true",
-                "FARGATE_CPU": "4096",
-                "FARGATE_MEMORY": "8192",
+                "FARGATE_CPU": str(cpu),
+                "FARGATE_MEMORY": str(memory),
+                "FARGATE_EPHEMERAL_STORAGE_GIB": str(ephemeral_storage_gib),
             },
         )
         container.add_port_mappings(ecs.PortMapping(container_port=80))
