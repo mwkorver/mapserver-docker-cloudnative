@@ -37,6 +37,9 @@ def db_connection_string():
     (matching the AWS Secrets Manager schema), while local dev / earlier
     versions used DB_PASS — honor both to avoid silent unauthenticated
     connections.
+
+    Intentional copy of admin_api.db_connection_string — both files run as
+    separate processes. Keep in sync if connection-string logic changes.
     """
     host = os.environ.get("DB_HOST")
     user = os.environ.get("DB_USER")

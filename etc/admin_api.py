@@ -6,6 +6,7 @@ import math
 import os
 import random
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -25,7 +26,6 @@ except ImportError:
 SUPERVISOR_CONF = Path("/etc/supervisor/conf.d/supervisord.conf")
 ADMIN_CONFIG = Path("/usr/src/admin/config.json")
 RUNTIME_CONFIG = Path("/usr/src/admin/runtime_config.json")
-VIEWER_CONFIG = Path("/usr/src/viewer/config.json")
 MAPFILE = Path("/usr/src/mapfiles/mapfile.map")
 COLLECTIONS_FILE = Path("/usr/src/mapfiles/collections.json")
 MAPFILES_DIR = Path("/usr/src/mapfiles")
@@ -40,7 +40,6 @@ DEFAULT_RUNTIME = {
     "gdalCacheMaxMb": 128,
     "vsiCacheSizeMb": 32,
     "mapserverDebug": False,
-    "imageryMinZoom": 18,
     "nginxCacheMaxSize": "20g",
     "nginxCacheTtl": "24h",
     "nginxCache404Ttl": "1m",
@@ -171,7 +170,7 @@ def _collection_artifact_paths(collection):
     container files.
     """
     paths = []
-    for key in ["tileindex", "tileindex_geojson", "footprints_geojson", "inventory_fgb"]:
+    for key in ["tileindex", "tileindex_geojson", "footprints_geojson"]:
         value = collection.get(key)
         if value:
             paths.append(Path(value))
@@ -402,7 +401,6 @@ def validate_runtime(config):
     result["activeCollection"] = str(result.get("activeCollection") or "").strip()
     result["gdalCacheMaxMb"] = int(result["gdalCacheMaxMb"])
     result["vsiCacheSizeMb"] = int(result["vsiCacheSizeMb"])
-    result["imageryMinZoom"] = int(result["imageryMinZoom"])
     result["mapserverDebug"] = bool(result["mapserverDebug"])
     result["nginxCacheMaxSize"] = validate_nginx_size(result["nginxCacheMaxSize"], "nginxCacheMaxSize")
     result["nginxCacheTtl"] = validate_nginx_ttl(result["nginxCacheTtl"], "nginxCacheTtl")
@@ -411,8 +409,6 @@ def validate_runtime(config):
         raise ValueError("gdalCacheMaxMb must be between 0 and 65536")
     if result["vsiCacheSizeMb"] < 0 or result["vsiCacheSizeMb"] > 65536:
         raise ValueError("vsiCacheSizeMb must be between 0 and 65536")
-    if result["imageryMinZoom"] < 0 or result["imageryMinZoom"] > 22:
-        raise ValueError("imageryMinZoom must be between 0 and 22")
     return result
 
 
@@ -442,16 +438,8 @@ def validate_nginx_ttl(value, name):
 def save_runtime_config(config):
     config = validate_runtime(config)
     RUNTIME_CONFIG.write_text(json.dumps(config, indent=2) + "\n")
-    VIEWER_CONFIG.write_text(
-        json.dumps(
-            {
-                "activeCollection": config["activeCollection"],
-                "imageryMinZoom": config["imageryMinZoom"],
-            },
-            indent=2,
-        )
-        + "\n"
-    )
+    # viewer/config.json is proxied by nginx to the /viewer-config API endpoint,
+    # so the static file is never served directly. No write needed here.
     return config
 
 
@@ -763,6 +751,9 @@ _PROGRESS_RE = re.compile(r"Scanned (\d+)/(\d+); failures=(\d+)")
 
 
 def db_connection_string():
+    # Intentional copy of mapfile_generator.db_connection_string — both files
+    # run as separate processes and cannot share a module. Keep in sync if
+    # connection-string logic changes (e.g. SSL, connection pooling).
     host = os.environ.get("DB_HOST")
     user = os.environ.get("DB_USER")
     if not (host and user):
@@ -1008,7 +999,10 @@ def run_benchmark(payload):
     clear_cache = bool(payload.get("clear_cache", False))
 
     if clear_cache:
-        subprocess.run(["rm", "-rf", "/var/cache/nginx/cog/*"], check=False)
+        # shutil.rmtree + mkdir rather than subprocess so the glob expands
+        # correctly (passing "cog/*" as a single argv element silently does nothing).
+        shutil.rmtree(str(NGINX_CACHE), ignore_errors=True)
+        NGINX_CACHE.mkdir(parents=True, exist_ok=True)
 
     config = viewer_config()
     bounds = config.get("bounds", [[37.0, -90.0], [42.0, -73.0]])
