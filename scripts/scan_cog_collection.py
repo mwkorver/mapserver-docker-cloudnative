@@ -79,6 +79,8 @@ def configure_gdal_s3_credentials(access_mode, requester_pays, bucket, region):
     gdal.SetConfigOption("AWS_SECRET_ACCESS_KEY", creds["secret_key"])
     if creds.get("token"):
         gdal.SetConfigOption("AWS_SESSION_TOKEN", creds["token"])
+
+
 COLLECTIONS_SCHEMA_VERSION = 1
 
 
@@ -388,25 +390,6 @@ def group_features_by_epsg(native_features, web_features):
     return native_by_epsg, web_by_epsg
 
 
-def inventory_features_4326(web_features):
-    srs_3857 = osr.SpatialReference()
-    srs_3857.ImportFromEPSG(WEB_MERCATOR_EPSG)
-    srs_3857.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
-    srs_4326 = osr.SpatialReference()
-    srs_4326.ImportFromEPSG(WGS84_EPSG)
-    srs_4326.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
-    transform = osr.CoordinateTransformation(srs_3857, srs_4326)
-
-    features = []
-    for feature in web_features:
-        ring_4326 = []
-        for x, y in feature["geometry"]["coordinates"][0]:
-            lon, lat, _ = transform.TransformPoint(float(x), float(y))
-            ring_4326.append([lon, lat])
-        features.append(feature_with_geometry(feature, {"type": "Polygon", "coordinates": [ring_4326]}))
-    return features
-
-
 def features_bbox(features):
     """Return [minx, miny, maxx, maxy] across all rings, skipping non-finite points.
 
@@ -488,16 +471,21 @@ def _ring_to_wkt(ring):
     return f"POLYGON(({parts}))"
 
 
-def load_into_postgis(collection_id, native_features, web_features, source_epsg):
-    """Replace cog_index rows for this collection with the freshly scanned set.
+def load_into_postgis(collection_id, native_features, web_features, source_epsg, delete_first=True):
+    """Bulk-insert one EPSG group's features into cog_index.
 
-    Wraps the DELETE + bulk INSERT in a single transaction so a partial
-    failure leaves the previous index intact. Returns the row count on
+    ``source_epsg`` is used as the SRID for every row's geom_native; callers
+    must pass only features whose native CRS matches that EPSG.  For
+    multi-EPSG collections, call once per group with ``delete_first=True``
+    only on the first group so a single DELETE covers the whole collection
+    before inserting.
+
+    Wraps the optional DELETE + INSERT in a single transaction so a partial
+    failure leaves the previous index intact.  Returns the row count on
     success, or raises on connection / SQL error.
 
     Reads connection params from DB_HOST / DB_PORT / DB_NAME / DB_USER /
-    DB_PASS. Caller must ensure those are set; we don't fall back to
-    anything sensible.
+    DB_PASS.  Caller must ensure those are set; we don't fall back silently.
     """
     if psycopg2 is None:
         raise RuntimeError("psycopg2 not installed; cannot load PostGIS")
@@ -509,9 +497,8 @@ def load_into_postgis(collection_id, native_features, web_features, source_epsg)
         key = nf["properties"]["key"]
         wf = web_by_key.get(key)
         if wf is None:
-            # No web footprint (projection-edge drop). Still index the row;
-            # synthesise a 3857 polygon from the native bbox so the geom
-            # column stays NOT NULL. The native geom is what MapServer uses.
+            # No web footprint (projection-edge drop). Native geom is still
+            # usable for the raster TILEINDEX; skip only this web column.
             continue
         native_wkt = _ring_to_wkt(nf["geometry"]["coordinates"][0])
         web_wkt = _ring_to_wkt(wf["geometry"]["coordinates"][0])
@@ -535,10 +522,11 @@ def load_into_postgis(collection_id, native_features, web_features, source_epsg)
     try:
         with conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    "DELETE FROM cog_index WHERE collection_id = %s",
-                    (collection_id,),
-                )
+                if delete_first:
+                    cur.execute(
+                        "DELETE FROM cog_index WHERE collection_id = %s",
+                        (collection_id,),
+                    )
                 execute_values(
                     cur,
                     """
@@ -703,8 +691,6 @@ def main():
         })
 
     write_geojson(args.output_web, f"{args.collection}_footprints_3857", WEB_MERCATOR_EPSG, web_features)
-    inventory_path = Path(args.output_web).with_name(f"{Path(args.output_web).stem.replace('_footprints_3857', '')}_inventory_4326.fgb")
-    write_tileindex_fgb(inventory_path, f"{args.collection}_inventory_4326", WGS84_EPSG, inventory_features_4326(web_features))
     elapsed = time.time() - started
     print(
         f"Wrote {len(native_features)} features across {len(source_epsgs)} source EPSG group(s): "
@@ -715,13 +701,26 @@ def main():
     # On AWS (DB_HOST set), push the freshly scanned features into PostGIS
     # and flag the collection so mapfile_generator emits POSTGIS layers.
     # On local (no DB_HOST), this block is skipped and the collection
-    # continues to use the OGR/GeoJSON path.
+    # continues to use the OGR/FlatGeobuf path.
+    #
+    # Multi-EPSG: DELETE once (first group) then INSERT per group so each
+    # group uses the correct native SRID. Passing all features to a single
+    # call with source_epsgs[0] would stamp the wrong SRID on secondary groups.
     postgis_loaded = False
     if os.environ.get("DB_HOST"):
         try:
-            n = load_into_postgis(args.collection, native_features, web_features, source_epsgs[0])
+            total_rows = 0
+            for i, source_epsg in enumerate(source_epsgs):
+                n = load_into_postgis(
+                    args.collection,
+                    native_by_epsg[source_epsg],
+                    web_by_epsg.get(source_epsg, []),
+                    source_epsg,
+                    delete_first=(i == 0),
+                )
+                total_rows += n
             postgis_loaded = True
-            print(f"PostGIS: loaded {n} rows into cog_index for {args.collection}", flush=True)
+            print(f"PostGIS: loaded {total_rows} rows into cog_index for {args.collection}", flush=True)
         except Exception as exc:
             print(f"ERROR: PostGIS load failed: {exc}", file=sys.stderr, flush=True)
             raise
@@ -783,7 +782,6 @@ def main():
             "tileindex_layer_name": tileindexes[0]["tileindex_layer_name"],
             "tileindexes": tileindexes,
             "footprints_geojson": os.path.abspath(args.output_web),
-            "inventory_fgb": os.path.abspath(inventory_path),
             "postgis": postgis_loaded,
             "indexed_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
         }
