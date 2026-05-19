@@ -29,22 +29,29 @@ serving.
 ## Prereqs
 
 ```bash
+export AWS_ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+export AWS_REGION=us-west-2
+
 pip install -r requirements.txt
 npm install -g aws-cdk             # or use npx cdk
-aws ecr create-repository --repository-name mapserver-docker-cloudnative --region us-west-2
-aws s3 mb s3://mapserver-docker-cloudnative --region us-west-2
+aws ecr create-repository --repository-name mapserver-docker-cloudnative --region $AWS_REGION
+aws s3 mb s3://mapserver-docker-cloudnative-${AWS_ACCOUNT}-${AWS_REGION} --region $AWS_REGION
 ```
+
+ECR repository names are per-account/per-region. S3 bucket names are globally
+unique, so the bucket name above is namespaced with your account ID and region.
 
 Push an image so the service can start:
 
 ```bash
 # from repo root
-docker build --platform linux/arm64 -t mapserver-docker-cloudnative .
-aws ecr get-login-password --region us-west-2 | \
-  docker login --username AWS --password-stdin <acct>.dkr.ecr.us-west-2.amazonaws.com
-docker tag mapserver-docker-cloudnative:latest \
-  <acct>.dkr.ecr.us-west-2.amazonaws.com/mapserver-docker-cloudnative:latest
-docker push <acct>.dkr.ecr.us-west-2.amazonaws.com/mapserver-docker-cloudnative:latest
+aws ecr get-login-password --region $AWS_REGION | \
+  docker login --username AWS --password-stdin \
+    ${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com
+
+docker buildx build --platform linux/arm64 \
+  -t ${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com/mapserver-docker-cloudnative:latest \
+  --push .
 ```
 
 The deployed container loads `config/collections.json` from the config bucket
@@ -58,12 +65,13 @@ replacement does not lose collection metadata. Optional escape hatch:
 ## Deploy
 
 ```bash
-export CDK_DEFAULT_ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
-export CDK_DEFAULT_REGION=us-west-2
+export CDK_DEFAULT_ACCOUNT=$AWS_ACCOUNT
+export CDK_DEFAULT_REGION=$AWS_REGION
 
 cdk bootstrap                        # one-time per account/region
 cdk diff                             # preview
-cdk deploy
+cdk deploy \
+  -c config_bucket=mapserver-docker-cloudnative-${AWS_ACCOUNT}-${AWS_REGION}
 ```
 
 Output `WmsUrl` is your endpoint:
