@@ -117,8 +117,7 @@ export CDK_DEFAULT_REGION=$AWS_REGION
 
 npx aws-cdk bootstrap     # one-time per account/region
 npx aws-cdk diff          # preview what will be created
-npx aws-cdk deploy \
-  -c config_bucket=mapserver-docker-cloudnative-${AWS_ACCOUNT}-${AWS_REGION}
+npx aws-cdk deploy
 ```
 
 Deploy takes ~10 min (RDS provisioning is the long pole). The stack outputs include the ALB DNS name and the full WMS URL.
