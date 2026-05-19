@@ -32,7 +32,7 @@ class MapserverStack(Stack):
       - S3 config bucket (referenced)
       - RDS PostgreSQL db.t4g.micro with PostGIS, pg_stat_statements, pg_trgm
       - DB init Lambda (custom resource): enables extensions, creates schema
-      - ECS Fargate cluster + service (ARM64, 1 vCPU / 4 GB)
+      - ECS Fargate cluster + service (ARM64, 4 vCPU / 8 GB)
       - ALB (HTTP:80) with WMS GetCapabilities health check
       - CloudWatch log group + autoscaling on CPU
     """
