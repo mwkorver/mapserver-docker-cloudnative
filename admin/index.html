@@ -380,8 +380,9 @@
   <main>
     <div class="tabs" role="tablist" aria-label="Admin sections">
       <button class="tab-button active" data-tab="collections" role="tab" aria-selected="true">Collections</button>
-      <button class="tab-button" data-tab="runtime" role="tab" aria-selected="false">Runtime</button>
-      <button class="tab-button" data-tab="cache" role="tab" aria-selected="false">Cache</button>
+      <button class="tab-button" data-tab="runtime" role="tab" aria-selected="false">MapServer/GDAL</button>
+      <button class="tab-button" data-tab="environment" role="tab" aria-selected="false">Environment</button>
+      <button class="tab-button" data-tab="cache" role="tab" aria-selected="false">Nginx Cache</button>
       <button class="tab-button" data-tab="benchmark" role="tab" aria-selected="false">Benchmark</button>
     </div>
 
@@ -606,23 +607,81 @@ done</pre>
           </div>
         </div>
 
+      </div>
+    </section>
+
+    <section id="tab-environment" class="tab-panel">
+      <div class="actions">
+        <button id="environment-refresh">Refresh environment</button>
+        <div class="timestamp" id="environment-updated">Not checked yet</div>
+      </div>
+
+      <div class="grid">
         <div class="panel">
-          <h2>COG Index</h2>
+          <h2>Runtime Environment</h2>
+          <div class="metric">
+            <span>Mode</span>
+            <span id="env-mode">—</span>
+          </div>
+          <div class="metric">
+            <span>AWS region</span>
+            <span id="env-region">—</span>
+          </div>
+          <div class="metric">
+            <span>Public host</span>
+            <span id="env-public-host">—</span>
+          </div>
+          <div class="metric">
+            <span>S3 signing</span>
+            <span id="env-s3-signing">—</span>
+          </div>
+          <div class="metric">
+            <span>Availability zone</span>
+            <span id="env-az">—</span>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>Compute</h2>
+          <div class="metric">
+            <span>Fargate CPU</span>
+            <span id="env-fargate-cpu">—</span>
+          </div>
+          <div class="metric">
+            <span>Fargate memory</span>
+            <span id="env-fargate-memory">—</span>
+          </div>
+          <div class="metric">
+            <span>Ephemeral storage</span>
+            <span id="env-ephemeral-storage">—</span>
+          </div>
+          <div class="metric">
+            <span>ECS task</span>
+            <span id="env-ecs-task">—</span>
+          </div>
+          <div class="metric">
+            <span>Task definition</span>
+            <span id="env-task-definition">—</span>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>Data Backend</h2>
           <div class="metric">
             <span>Active collection</span>
-            <span id="index-active-collection">—</span>
+            <span id="env-active-collection">—</span>
           </div>
           <div class="metric">
             <span>Backend</span>
-            <span id="index-backend">—</span>
+            <span id="env-index-backend">—</span>
           </div>
           <div class="metric">
             <span>COGs</span>
-            <span id="index-cog-count">—</span>
+            <span id="env-cog-count">—</span>
           </div>
           <div class="metric">
             <span>Native EPSG</span>
-            <span id="index-native-epsg">—</span>
+            <span id="env-native-epsg">—</span>
           </div>
           <div class="metric">
             <span>Footprint count</span>
@@ -634,7 +693,7 @@ done</pre>
           </div>
           <div class="metric">
             <span>Index source</span>
-            <span id="index-source">—</span>
+            <span id="env-index-source">—</span>
           </div>
         </div>
       </div>
@@ -767,6 +826,33 @@ done</pre>
           </div>
         </div>
 
+        <div class="panel">
+          <h2>Test Tile Logic</h2>
+          <p style="margin: 0 0 12px 0; font-size: 14px; color: var(--muted); line-height: 1.4;">
+            Benchmark requests are prepared before timing starts, so empty collection-bbox tiles do not distort WMS timing.
+          </p>
+          <div class="metric">
+            <span>Candidate source</span>
+            <span>active collection bbox at selected z/x/y zoom</span>
+          </div>
+          <div class="metric">
+            <span>Validity check</span>
+            <span>active FGB or PostGIS raster index spatial filter</span>
+          </div>
+          <div class="metric">
+            <span>Accepted tiles</span>
+            <span>inside one COG or covered by 2-4 COGs</span>
+          </div>
+          <div class="metric">
+            <span>Rejected tiles</span>
+            <span>empty, partial coverage, or too many COGs</span>
+          </div>
+          <div class="metric">
+            <span>Code</span>
+            <span><code>benchmark/tile_benchmark.py</code></span>
+          </div>
+        </div>
+
         <div class="panel" style="grid-column: 1 / -1; overflow-x: auto;">
           <h2>Results History</h2>
           <table class="data-table" style="width: 100%; white-space: nowrap;">
@@ -815,6 +901,7 @@ done</pre>
     const numprocsUrl = `${window.location.origin}/admin/api/numprocs`;
     const runtimeUrl = `${window.location.origin}/admin/api/runtime`;
     const nginxCacheUrl = `${window.location.origin}/admin/api/nginx-cache`;
+    const environmentUrl = `${window.location.origin}/admin/api/environment`;
     const collectionsUrl = `${window.location.origin}/admin/api/collections`;
     const activeCollectionUrl = `${window.location.origin}/admin/api/collections/active`;
 
@@ -987,18 +1074,8 @@ done</pre>
         }
         const config = await response.json();
         latestConfig = config;
-        const backend = config.indexBackend || {};
         document.getElementById("mapserver-workers").textContent = config.mapserverNumprocs ?? "—";
         document.getElementById("mapserver-observed-workers").textContent = config.mapserverWorkers ?? "—";
-        document.getElementById("index-active-collection").textContent = backend.activeCollection || "—";
-        document.getElementById("index-backend").textContent = backend.backend || "—";
-        document.getElementById("index-cog-count").textContent = Number.isFinite(backend.cogCount)
-          ? backend.cogCount.toLocaleString()
-          : "—";
-        document.getElementById("index-native-epsg").textContent = Array.isArray(backend.nativeEpsgs) && backend.nativeEpsgs.length
-          ? backend.nativeEpsgs.join(", ")
-          : "—";
-        document.getElementById("index-source").textContent = backend.indexSource || "—";
         document.getElementById("numprocs-input").value = config.mapserverNumprocs ?? "";
         document.getElementById("numprocs-input").max = config.maxMapserverNumprocs ?? 32;
         document.getElementById("numprocs-input").disabled = !config.writeEnabled;
@@ -1028,10 +1105,70 @@ done</pre>
       } catch (error) {
         document.getElementById("mapserver-workers").textContent = "unknown";
         document.getElementById("mapserver-observed-workers").textContent = "unknown";
-        document.getElementById("index-backend").textContent = "unknown";
         document.getElementById("nginx-workers").textContent = "unknown";
         document.getElementById("numprocs-write-status").textContent = "unknown";
         document.getElementById("cache-config-status").textContent = "unknown";
+      }
+    }
+
+    function shortArn(arn) {
+      if (!arn) return "—";
+      return String(arn).split("/").filter(Boolean).pop() || arn;
+    }
+
+    function formatFargateCpu(cpu, vcpu) {
+      if (!cpu) return "—";
+      return vcpu ? `${cpu} units (${vcpu} vCPU)` : `${cpu} units`;
+    }
+
+    function formatMemoryMb(value) {
+      if (!value) return "—";
+      const numeric = Number.parseInt(value, 10);
+      return Number.isFinite(numeric) ? `${numeric.toLocaleString()} MB` : String(value);
+    }
+
+    function formatStorageGib(value) {
+      return value ? `${value} GiB` : "—";
+    }
+
+    async function refreshEnvironment() {
+      const refreshButton = document.getElementById("environment-refresh");
+      refreshButton.disabled = true;
+      refreshButton.textContent = "Refreshing…";
+      try {
+        const { response } = await timedFetch(environmentUrl, { timeoutMs: 5000 });
+        const environment = await response.json();
+        if (!response.ok) {
+          throw new Error(environment.error || `HTTP ${response.status}`);
+        }
+        const backend = environment.indexBackend || {};
+        document.getElementById("env-mode").textContent = environment.mode || "—";
+        document.getElementById("env-region").textContent = environment.awsRegion || "—";
+        document.getElementById("env-public-host").textContent = environment.publicHost || "—";
+        document.getElementById("env-s3-signing").textContent = environment.s3Signing || "—";
+        document.getElementById("env-az").textContent = environment.availabilityZone || "—";
+        document.getElementById("env-fargate-cpu").textContent = formatFargateCpu(environment.fargateCpu, environment.fargateCpuVcpu);
+        document.getElementById("env-fargate-memory").textContent = formatMemoryMb(environment.fargateMemory);
+        document.getElementById("env-ephemeral-storage").textContent = formatStorageGib(environment.fargateEphemeralStorageGib);
+        document.getElementById("env-ecs-task").textContent = shortArn(environment.ecsTaskArn);
+        document.getElementById("env-task-definition").textContent = environment.ecsTaskFamily
+          ? `${environment.ecsTaskFamily}:${environment.ecsTaskRevision || "—"}`
+          : "—";
+        document.getElementById("env-active-collection").textContent = backend.activeCollection || "—";
+        document.getElementById("env-index-backend").textContent = backend.backend || "—";
+        document.getElementById("env-cog-count").textContent = Number.isFinite(backend.cogCount)
+          ? backend.cogCount.toLocaleString()
+          : "—";
+        document.getElementById("env-native-epsg").textContent = Array.isArray(backend.nativeEpsgs) && backend.nativeEpsgs.length
+          ? backend.nativeEpsgs.join(", ")
+          : "—";
+        document.getElementById("env-index-source").textContent = backend.indexSource || "—";
+        document.getElementById("environment-updated").textContent = `Last refreshed ${new Date().toLocaleTimeString()}`;
+      } catch (error) {
+        document.getElementById("environment-updated").textContent = `failed: ${error.message}`;
+      } finally {
+        refreshButton.disabled = false;
+        refreshButton.textContent = "Refresh environment";
       }
     }
 
@@ -1517,7 +1654,7 @@ done</pre>
       const btn = document.getElementById("run-benchmark");
       const status = document.getElementById("bench-status");
       btn.disabled = true;
-      status.textContent = "Running benchmark on server...";
+      status.textContent = "Preparing benchmark tile set...";
       status.className = "warn";
       
       const payload = {
@@ -1528,10 +1665,27 @@ done</pre>
       };
 
       try {
+        const { response: prepareResponse } = await timedFetch("/admin/api/benchmark", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...payload, prepareOnly: true }),
+          timeoutMs: 60000
+        });
+        const prepared = await prepareResponse.json();
+        if (!prepareResponse.ok) throw new Error(prepared.error || "Benchmark preparation failed");
+
+        const generated = prepared.candidateStats?.generated ?? prepared.tiles?.length ?? payload.requests;
+        const attempts = prepared.candidateStats?.attempts ?? "—";
+        status.textContent = `Prepared ${generated} benchmark tiles from ${attempts} candidates. Running benchmark on server...`;
+
         const { response } = await timedFetch("/admin/api/benchmark", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
+          body: JSON.stringify({
+            ...payload,
+            preparedTiles: prepared.tiles,
+            candidateStats: prepared.candidateStats,
+          }),
           timeoutMs: 60000
         });
         const data = await response.json();
@@ -1612,12 +1766,14 @@ done</pre>
         panel.classList.toggle("active", panel.id === `tab-${name}`);
       });
       if (name === "cache") refreshCacheStats();
+      if (name === "environment") refreshEnvironment();
       if (name === "benchmark") populateBenchmarkZoom();
     }
 
     document.getElementById("refresh").addEventListener("click", refresh);
     document.getElementById("numprocs-save").addEventListener("click", updateNumprocs);
     document.getElementById("runtime-save").addEventListener("click", updateRuntime);
+    document.getElementById("environment-refresh").addEventListener("click", refreshEnvironment);
     document.getElementById("cache-refresh").addEventListener("click", refreshCacheStats);
     document.getElementById("cache-config-save").addEventListener("click", updateCacheConfig);
     document.getElementById("run-benchmark").addEventListener("click", runBenchmark);

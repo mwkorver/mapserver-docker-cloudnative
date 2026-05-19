@@ -1,16 +1,11 @@
 #!/usr/bin/env python3
-import concurrent.futures
 import datetime as dt
 import json
-import math
 import os
-import random
 import re
-import shutil
 import subprocess
 import sys
 import threading
-import time
 import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -67,6 +62,13 @@ FALLBACK_VIEWER_CONFIG = {
 FOOTPRINT_LIMIT_DEFAULT = 2000
 FOOTPRINT_LIMIT_MAX = 50000
 _FOOTPRINT_CACHE: dict[str, dict] = {}
+
+for module_path in ("/usr/src", str(Path(__file__).resolve().parent.parent)):
+    if module_path not in sys.path:
+        sys.path.insert(0, module_path)
+
+from benchmark.tile_benchmark import prepare_benchmark as prepare_tile_benchmark
+from benchmark.tile_benchmark import run_benchmark as run_tile_benchmark
 
 
 def _read_collections():
@@ -384,6 +386,44 @@ def active_backend_summary():
     }
 
 
+def ecs_task_metadata():
+    uri = os.environ.get("ECS_CONTAINER_METADATA_URI_V4")
+    if not uri:
+        return {}
+    try:
+        with urllib.request.urlopen(uri.rstrip("/") + "/task", timeout=1) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except Exception:
+        return {}
+
+
+def environment_info():
+    metadata = ecs_task_metadata()
+    processes = observed_process_counts()
+    backend = active_backend_summary()
+    fargate_cpu = os.environ.get("FARGATE_CPU", "4096")
+    fargate_memory = os.environ.get("FARGATE_MEMORY", "8192")
+    return {
+        "mode": "AWS Fargate" if metadata or os.environ.get("DB_SECRET_ARN") else "local Docker",
+        "awsRegion": os.environ.get("AWS_REGION", os.environ.get("AWS_DEFAULT_REGION", "us-west-2")),
+        "publicHost": os.environ.get("PUBLIC_HOST", "localhost"),
+        "s3Signing": os.environ.get("S3_SIGNING", "auto"),
+        "fargateCpu": fargate_cpu,
+        "fargateCpuVcpu": round(int(fargate_cpu) / 1024, 2) if str(fargate_cpu).isdigit() else None,
+        "fargateMemory": fargate_memory,
+        "fargateEphemeralStorageGib": os.environ.get("FARGATE_EPHEMERAL_STORAGE_GIB", "21"),
+        "ecsCluster": metadata.get("Cluster", ""),
+        "ecsTaskArn": metadata.get("TaskARN", ""),
+        "ecsTaskFamily": metadata.get("Family", ""),
+        "ecsTaskRevision": metadata.get("Revision", ""),
+        "availabilityZone": metadata.get("AvailabilityZone", ""),
+        "mapserverNumprocs": current_numprocs(),
+        **processes,
+        "effectiveWmsWorkers": processes.get("mapserverWorkers") or current_numprocs(),
+        "indexBackend": backend,
+    }
+
+
 def runtime_config():
     config = dict(DEFAULT_RUNTIME)
     if RUNTIME_CONFIG.exists():
@@ -553,18 +593,18 @@ def nginx_cache_stats():
 
 def admin_config():
     runtime = runtime_config()
-    processes = observed_process_counts()
-    backend = active_backend_summary()
+    environment = environment_info()
     config = {
-        "mapserverNumprocs": current_numprocs(),
-        **processes,
-        "indexBackend": backend,
+        "mapserverNumprocs": environment["mapserverNumprocs"],
+        "mapserverWorkers": environment["mapserverWorkers"],
+        "nginxWorkers": environment["nginxWorkers"],
+        "indexBackend": environment["indexBackend"],
         "maxMapserverNumprocs": MAX_WORKERS,
         "writeEnabled": write_enabled(),
-        "fargateCpu": os.environ.get("FARGATE_CPU", "4096"),
-        "fargateMemory": os.environ.get("FARGATE_MEMORY", "8192"),
-        "s3Signing": os.environ.get("S3_SIGNING", "auto"),
-        "awsRegion": os.environ.get("AWS_REGION", "us-west-2"),
+        "fargateCpu": environment["fargateCpu"],
+        "fargateMemory": environment["fargateMemory"],
+        "s3Signing": environment["s3Signing"],
+        "awsRegion": environment["awsRegion"],
         "staticNginxCacheSettings": STATIC_NGINX_CACHE_SETTINGS,
         **runtime,
     }
@@ -977,96 +1017,16 @@ def list_jobs():
         return {"jobs": [dict(j) for j in _JOBS.values()]}
 
 
-def _tile_to_bbox_3857(x, y, z):
-    max_ext = 20037508.342789244
-    res = (max_ext * 2) / (2**z)
-    minx = -max_ext + x * res
-    miny = max_ext - (y + 1) * res
-    maxx = -max_ext + (x + 1) * res
-    maxy = max_ext - y * res
-    return f"{minx},{miny},{maxx},{maxy}"
-
-def _lonlat_to_xy(lon, lat, z):
-    n = 2.0 ** z
-    x = int((lon + 180.0) / 360.0 * n)
-    lat_rad = math.radians(lat)
-    y = int((1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0 * n)
-    return x, y
-
 def run_benchmark(payload):
-    concurrency = int(payload.get("concurrency", 10))
-    total_requests = int(payload.get("requests", 50))
-    clear_cache = bool(payload.get("clear_cache", False))
-
-    if clear_cache:
-        # shutil.rmtree + mkdir rather than subprocess so the glob expands
-        # correctly (passing "cog/*" as a single argv element silently does nothing).
-        shutil.rmtree(str(NGINX_CACHE), ignore_errors=True)
-        NGINX_CACHE.mkdir(parents=True, exist_ok=True)
-
     config = viewer_config()
-    bounds = config.get("bounds", [[37.0, -90.0], [42.0, -73.0]])
-    layer = config.get("layerName", "imagery")
-    
-    if "zoom" in payload:
-        zoom = int(payload["zoom"])
-    else:
-        zoom = config.get("imageryMinZoom", 14)
-
-    min_lat = min(bounds[0][0], bounds[1][0])
-    max_lat = max(bounds[0][0], bounds[1][0])
-    min_lon = min(bounds[0][1], bounds[1][1])
-    max_lon = max(bounds[0][1], bounds[1][1])
-
-    min_x, max_y = _lonlat_to_xy(min_lon, min_lat, zoom)
-    max_x, min_y = _lonlat_to_xy(max_lon, max_lat, zoom)
-    
-    if min_x > max_x: min_x, max_x = max_x, min_x
-    if min_y > max_y: min_y, max_y = max_y, min_y
-
-    urls = []
-    for _ in range(total_requests):
-        x = random.randint(min_x, max_x)
-        y = random.randint(min_y, max_y)
-        bbox = _tile_to_bbox_3857(x, y, zoom)
-        url = f"http://127.0.0.1/mapserv?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS={layer}&CRS=EPSG:3857&BBOX={bbox}&WIDTH=256&HEIGHT=256&FORMAT=image/png"
-        urls.append(url)
-
-    def fetch_url(url):
-        start = time.time()
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": "MapServerBenchmark"})
-            with urllib.request.urlopen(req, timeout=10) as response:
-                response.read()
-                return time.time() - start, True
-        except Exception:
-            return time.time() - start, False
-
-    start_total = time.time()
-    results = []
-    success_count = 0
-    with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
-        for duration, success in executor.map(fetch_url, urls):
-            results.append(duration)
-            if success:
-                success_count += 1
-
-    total_duration = time.time() - start_total
-    results.sort()
-    avg = sum(results) / len(results) if results else 0
-    p50 = results[int(len(results) * 0.5)] if results else 0
-    p95 = results[int(len(results) * 0.95)] if results else 0
-
-    return {
-        "concurrency": concurrency,
-        "requests": total_requests,
-        "success": success_count,
-        "failed": total_requests - success_count,
-        "total_time_ms": int(total_duration * 1000),
-        "avg_ms": int(avg * 1000),
-        "p50_ms": int(p50 * 1000),
-        "p95_ms": int(p95 * 1000),
-    }
+    doc = _read_collections()
+    active = _active_collection(doc.get("collections", []))
+    if not active:
+        raise ValueError("no active collection is configured")
+    db_conn = db_connection_string()
+    if payload.get("prepareOnly"):
+        return prepare_tile_benchmark(payload, active, config, db_conn)
+    return run_tile_benchmark(payload, active, config, NGINX_CACHE, db_conn)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1096,6 +1056,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/nginx-cache":
             try:
                 write_json(self, 200, nginx_cache_stats())
+            except Exception as exc:
+                write_error(self, 500, str(exc))
+            return
+        if path == "/environment":
+            try:
+                write_json(self, 200, environment_info())
             except Exception as exc:
                 write_error(self, 500, str(exc))
             return
