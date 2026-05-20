@@ -116,7 +116,7 @@ def header(extent, srs_set):
         f'      "ows_onlineresource"             "http://{PUBLIC_HOST}/mapserv"',
         f'      "ows_srs"                        "{srs_str}"',
         '      "ows_enable_request"             "*"',
-        '      "F_enable_request"               "*"',
+        '      "oga_enable_request"             "*"',
         '      "wms_allow_getmap_without_styles" "true"',
         '    END',
         '  END',
@@ -179,15 +179,11 @@ def footprints_layer(c, db_conn):
         '      "gml_include_items"  "all"',
         '      "ows_enable_request" "*"',
         '      "wfs_enable_request" "*"',
-        '      "F_enable_request"   "*"',
+        '      "oga_enable_request" "*"',
         '      "ows_maxfeatures"    "10000"',
         '    END',
         '  END',
     ]
-
-
-def tileindex_layer(c, db_conn):
-    return tileindex_layer_for_group(c, db_conn, None)
 
 
 def tileindex_groups(c):
@@ -251,10 +247,6 @@ def tileindex_layer_for_group(c, db_conn, group):
         '    END',
         '  END',
     ]
-
-
-def raster_layer(c):
-    return raster_layer_for_group(c, tileindex_groups(c)[0])
 
 
 def raster_layer_for_group(c, group):
