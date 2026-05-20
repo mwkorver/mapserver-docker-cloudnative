@@ -6,7 +6,7 @@ set -e
 # default CDK deployment.
 if [ -n "$MAPFILE_S3_URI" ]; then
     echo "Downloading mapfile from ${MAPFILE_S3_URI}..."
-    if aws s3 cp "${MAPFILE_S3_URI}" /usr/src/mapfiles/mapfile.map; then
+    if python3 /etc/fetch_startup_config.py s3-download "${MAPFILE_S3_URI}" /usr/src/mapfiles/mapfile.map; then
         echo "Mapfile ready."
     else
         echo "WARN: mapfile download failed; falling back to generator."
@@ -20,7 +20,7 @@ fi
 # upload the file.
 if [ -n "$COLLECTIONS_S3_URI" ]; then
     echo "Downloading collections from ${COLLECTIONS_S3_URI}..."
-    if aws s3 cp "${COLLECTIONS_S3_URI}" /usr/src/mapfiles/collections.json; then
+    if python3 /etc/fetch_startup_config.py s3-download "${COLLECTIONS_S3_URI}" /usr/src/mapfiles/collections.json; then
         echo "Collections catalog ready."
     else
         echo "WARN: collections download failed; using bundled collections.json."
@@ -32,15 +32,7 @@ fi
 # based on DB_HOST being set plus the per-collection postgis flag.
 if [ -n "$DB_SECRET_ARN" ]; then
     echo "Fetching DB credentials from ${DB_SECRET_ARN}..."
-    SECRET_JSON=$(aws secretsmanager get-secret-value \
-        --secret-id "$DB_SECRET_ARN" \
-        --region "${AWS_REGION:-us-west-2}" \
-        --query SecretString --output text)
-    export DB_HOST=$(jq -r .host     <<< "$SECRET_JSON")
-    export DB_PORT=$(jq -r .port     <<< "$SECRET_JSON")
-    export DB_NAME=$(jq -r .dbname   <<< "$SECRET_JSON")
-    export DB_USER=$(jq -r .username <<< "$SECRET_JSON")
-    export DB_PASS=$(jq -r .password <<< "$SECRET_JSON")
+    eval "$(python3 /etc/fetch_startup_config.py db-secret "${DB_SECRET_ARN}" "${AWS_REGION:-us-west-2}")"
     echo "DB host: ${DB_HOST}"
 fi
 
