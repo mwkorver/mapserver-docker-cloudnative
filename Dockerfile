@@ -1,5 +1,5 @@
 # Stage 1: build MapServer from source
-FROM ghcr.io/osgeo/gdal:ubuntu-full-3.12.4 AS builder
+FROM ghcr.io/osgeo/gdal:ubuntu-small-3.12.4 AS builder
 
 ARG MAPSERVER_VERSION=8.6.3
 
@@ -43,14 +43,14 @@ RUN apt-get update && \
     rm -rf /tmp/mapserver-${MAPSERVER_VERSION}
 
 # Stage 2: runtime image
-FROM ghcr.io/osgeo/gdal:ubuntu-full-3.12.4
+FROM ghcr.io/osgeo/gdal:ubuntu-small-3.12.4
 ARG TARGETARCH
 
 COPY --from=builder /usr/local/bin/mapserv /usr/local/bin/mapserv
 COPY --from=builder /usr/local/lib/libmapserver* /usr/local/lib/
 COPY --from=builder /usr/local/share/mapserver /usr/local/share/mapserver
 
-RUN apt-get update && apt-get upgrade -y && \
+RUN apt-get update && \
     env DEBIAN_FRONTEND=noninteractive \
     apt-get install -y --no-install-recommends \
     nginx \
@@ -61,6 +61,7 @@ RUN apt-get update && apt-get upgrade -y && \
     libgeos-c1v5 \
     libpq5 \
     python3-psycopg2 \
+    python3-boto3 \
     libxml2 \
     libpng16-16t64 \
     zlib1g \
@@ -73,14 +74,7 @@ RUN apt-get update && apt-get upgrade -y && \
     libharfbuzz0b \
     libprotobuf-c1 \
     libpcre2-posix3 \
-    gettext-base \
-    jq \
-    unzip && \
-    AWSCLI_ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "aarch64" || echo "x86_64") && \
-    curl "https://awscli.amazonaws.com/awscli-exe-linux-${AWSCLI_ARCH}.zip" -o "/tmp/awscliv2.zip" && \
-    unzip -q -d /tmp /tmp/awscliv2.zip && \
-    /tmp/aws/install && \
-    rm -rf /tmp/awscliv2.zip /tmp/aws && \
+    gettext-base && \
     apt-get autoremove -y && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
@@ -91,6 +85,7 @@ RUN ln -sf /etc/nginx/sites-available/mapserver_proxy.conf /etc/nginx/sites-enab
     chmod +x /etc/s3_sigv4_proxy.py && \
     chmod +x /etc/admin_api.py && \
     chmod +x /etc/mapfile_generator.py && \
+    chmod +x /etc/fetch_startup_config.py && \
     mkdir -p /var/cache/nginx/cog && \
     chown -R www-data:www-data /var/cache/nginx
 COPY mapfiles /usr/src/mapfiles
