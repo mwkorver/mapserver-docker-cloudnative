@@ -2,7 +2,7 @@
 
 > Based on the original work by [pedros007](https://github.com/pedros007/mapserver-docker). Thanks to Pete Schmitt for laying the foundation.
 
-A cloud-native MapServer deployment for serving Cloud Optimized GeoTIFFs (COGs) from AWS S3 over WMS / OGC API. Built to run on **AWS Fargate** (ARM64/Graviton) behind an ALB, provisioned end-to-end by a single `cdk deploy`.
+A self-contained MapServer + GDAL + nginx stack for serving Cloud Optimized GeoTIFFs (COGs) from AWS S3 over WMS / OGC API — built as a **tool for measuring server-side WMS performance** under different configurations, deployed end-to-end on AWS Fargate (ARM64/Graviton) by a single `cdk deploy`.
 
 **Stack:** MapServer 8.6.3 · GDAL 3.12.4 · nginx (proxy + range-cache + SigV4 signer) · FastCGI · supervisord · Ubuntu 24.04
 
@@ -10,16 +10,33 @@ A cloud-native MapServer deployment for serving Cloud Optimized GeoTIFFs (COGs) 
 
 ## What this project is for
 
-The point is **AWS deployment**. You have a bucket (or several) of COGs in S3 and want to serve them as a WMS endpoint without standing up a server, configuring MapServer by hand, or learning the Mapfile syntax. `cdk deploy` provisions everything; the admin UI handles the rest.
+Serving COGs over WMS at acceptable latency is not "deploy and forget", even on managed compute like ECS/Fargate. Throughput, tail latency, and cost-per-request depend on at least:
+
+- **MapServer worker count** (FastCGI procs) and the Fargate task's CPU/memory allocation
+- **GDAL cache tuning** (`GDAL_CACHEMAX`, `VSI_CACHE_SIZE`) per worker
+- **nginx range-cache size** in front of `/vsicurl` byte-range reads against S3
+- **Co-location** of compute and S3 bucket region
+- **Image-format pipeline** (PNG24 vs RGBA, hi-DPI tile doubling, `RESAMPLE` method, `PROCESSING` overrides for 16-bit imagery)
+- **COG block size and overview structure** of the source imagery
+- **WMS request shape** (tile size, projection mismatches, layer count)
+
+Getting any of those wrong leaves throughput or latency on the table. Getting them right requires **measurement**, not guesswork. This project bundles MapServer with the tooling to actually see what's happening on the server:
+
+- **`/viewer/`** — OpenLayers map that paints per-tile WMS round-trip times directly onto each tile cell, plus a slide-out perf panel summarising server and client samples.
+- **`/admin/`** — live worker counts, GDAL config introspection, the active backend chip (FlatGeobuf vs PostGIS), and a benchmark tab driving synthetic load.
+- **`/admin/api/benchmark`** — programmatic load endpoint for scripted before/after comparisons across deploys or env changes.
+- **MapServer numprocs / GDAL knobs** are env-driven on the running container or task definition: change them, rerun the benchmark, see the difference.
+
+**Scope:** server-side. How fast can MapServer + GDAL + nginx return WMS tiles for a given COG layout on a given Fargate configuration. Client-side, network-path, and CDN tuning (CloudFront, browser cache, edge gzip) are out of scope.
 
 ```
 AWS account + S3 COGs   →   cdk deploy   →   ALB URL
-                                              ├─ /viewer/     (OpenLayers)
-                                              ├─ /admin/      (manage collections)
+                                              ├─ /viewer/     (OpenLayers + tile timings)
+                                              ├─ /admin/      (collections + perf knobs + benchmark)
                                               └─ /mapserv?... (WMS / WFS / OGC API)
 ```
 
-The same container also runs locally (`docker run`) for inspection and development — point it at a public bucket, open the admin UI, see how the pieces fit together. **Local mode is a learning tool, not a production deployment path.** Latency to S3 from outside AWS makes serving real WMS traffic from your laptop impractical.
+The same container also runs locally (`docker run`) for inspection and development — point it at a public bucket, open the admin UI, see how the pieces fit together. **Local mode is a learning tool, not a perf-measurement environment.** Latency from outside AWS to S3 dwarfs any tuning differences, so any numbers from `docker run` on your laptop are useless for comparison purposes. Measure on Fargate.
 
 ---
 
@@ -28,8 +45,7 @@ The same container also runs locally (`docker run`) for inspection and developme
 1. **Deploy the stack** — `cdk deploy` provisions Fargate, ALB, RDS, log group, IAM, etc.
 2. **Open the admin UI** at `<alb>/admin/` and use the **Add a Collection** form to point at any bucket+prefix of COGs.
 3. The container's `scan_cog_collection.py` walks the bucket, reads each COG's header in parallel via GDAL, computes a per-COG bounding box, and writes:
-   - A **native-CRS [FlatGeobuf](https://flatgeobuf.org/) tile index** (used by MapServer's raster `TILEINDEX` to pick which COGs intersect a request bbox; R-tree indexed for fast spatial lookup)
-   - A **Web Mercator GeoJSON footprints file** (used by the viewer's footprint overlay and OGC API Features)
+   - A **native-CRS [FlatGeobuf](https://flatgeobuf.org/) tile index** (used by MapServer's raster `TILEINDEX` for tile lookup, **and** by MapServer's WFS layer that the OpenLayers viewer queries for COG footprints — R-tree indexed for fast spatial lookup at both layers).
    - On AWS, the same features are also **bulk-inserted into a PostGIS `cog_index` table** keyed by `collection_id`. MapServer reads from PostGIS in deployed mode and from FGB in local mode.
    - An entry in `mapfiles/collections.json` capturing the collection's id, label, bounds, COG count, CRS, etc. Scanner-time fields include `tileindex`, `tileindexes[]` (per-EPSG when a collection straddles multiple source CRSs), `raster_processing` (per-collection PROCESSING overrides for e.g. 16-bit imagery), and auto-derived zoom range.
 4. `mapfile_generator.py` reads `collections.json` and emits the MapServer `mapfile.map`. Backend is automatic — POSTGIS when `DB_HOST` is set and `collection.postgis=true`, OGR (FGB / GeoJSON) otherwise. nginx fronts FastCGI mapserv and a shared range-cache that sits in front of a local SigV4 signer — the signer uses the Fargate task's IAM role to sign requests to private (and requester-pays) buckets transparently.
