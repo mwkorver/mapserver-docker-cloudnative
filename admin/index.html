@@ -584,11 +584,19 @@ done</pre>
             </div>
           </div>
           <div class="inline-form">
-            <label for="vsi-cache-input">VSI_CACHE_SIZE MB</label>
+            <label for="vsi-cache-input">VSI_CACHE_SIZE</label>
             <div>
-              <input id="vsi-cache-input" type="number" min="0" max="65536" step="1" disabled />
+              <select id="vsi-cache-input" disabled>
+                <option value="0">Off</option>
+                <option value="16">16 MB</option>
+                <option value="32">32 MB</option>
+                <option value="64">64 MB</option>
+                <option value="128">128 MB</option>
+                <option value="256">256 MB</option>
+                <option value="512">512 MB</option>
+              </select>
               <div style="font-size: 12px; color: var(--muted); margin-top: 4px;">
-                0 disables the per-worker /vsicurl/ cache — the nginx range-cache below already covers this.
+                "Off" disables the per-worker /vsicurl/ cache — the nginx range-cache below already covers this.
               </div>
             </div>
           </div>
@@ -1084,7 +1092,21 @@ done</pre>
         document.getElementById("numprocs-input").disabled = !config.writeEnabled;
         document.getElementById("numprocs-write-status").textContent = config.writeEnabled ? "enabled" : "disabled";
         document.getElementById("gdal-cachemax-input").value = config.gdalCacheMaxMb ?? 128;
-        document.getElementById("vsi-cache-input").value = config.vsiCacheSizeMb ?? 0;
+        // VSI cache select.  If the server has a non-standard size (set
+        // out-of-band via the API), inject it as an option so the select
+        // can still show the live value.
+        (function setVsiCacheValue() {
+          var sel = document.getElementById("vsi-cache-input");
+          var v = String(config.vsiCacheSizeMb ?? 0);
+          var has = Array.from(sel.options).some(function (o) { return o.value === v; });
+          if (!has) {
+            var opt = document.createElement("option");
+            opt.value = v;
+            opt.textContent = v + " MB (custom)";
+            sel.appendChild(opt);
+          }
+          sel.value = v;
+        })();
         document.getElementById("mapserver-debug-input").checked = Boolean(config.mapserverDebug);
         document.getElementById("gdal-cachemax-input").disabled = !config.writeEnabled;
         document.getElementById("vsi-cache-input").disabled = !config.writeEnabled;
