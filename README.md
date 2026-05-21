@@ -40,6 +40,28 @@ The same container also runs locally (`docker run`) for inspection and developme
 
 ---
 
+## What's new here
+
+Most published cloud-native COG WMS / tile work falls into one of three patterns:
+
+- **Lambda + TiTiler** (DevelopmentSeed) — stateless per-invocation, no persistent cache layer in front of GDAL. The [TiTiler performance tuning notes](https://developmentseed.org/titiler/advanced/performance_tuning/) are the canonical published reference for the GDAL knobs that matter on serverless.
+- **GeoServer + GeoWebCache** — enterprise-default Java stack. GWC caches *rendered* output tiles, not the byte ranges of source data — a different caching layer than this project's.
+- **MapProxy / TileServer GL** in front of pre-rendered data — again, rendered-tile caching, not byte-range caching against live source COGs.
+
+This project is a different shape:
+
+- **Persistent compute** (ECS/Fargate) instead of Lambda — `/vsicurl/` state, the GDAL block cache, and the FastCGI worker pool all survive across requests.
+- **nginx byte-range proxy cache** between GDAL's `/vsicurl/` and the (private, SigV4-signed) S3 source — cache hits return COG byte ranges from local disk in single-digit milliseconds without re-hitting S3.
+- **Measurement built in** (viewer tile-timing overlay, perf panel, admin benchmark tab + `/admin/api/benchmark` endpoint) so the tunables are observable as you change them.
+
+### Credits
+
+The nginx-byte-range-proxy-cache-in-front-of-GDAL pattern has been discussed by **[Even Rouault](https://github.com/rouault)** — the lead GDAL maintainer — on the `gdal-dev` mailing list and at FOSS4G as one approach to amortising S3 byte-range latency. To my knowledge no published reference deployment of that pattern existed before this repo; the components have been talked about, but not assembled into a `cdk deploy`-able working stack with the measurement surface attached. Credit for the underlying idea belongs there.
+
+This repo also builds on the original Dockerised-MapServer work by [pedros007](https://github.com/pedros007/mapserver-docker), credited at the top.
+
+---
+
 ## How it works
 
 1. **Deploy the stack** — `cdk deploy` provisions Fargate, ALB, RDS, log group, IAM, etc.
