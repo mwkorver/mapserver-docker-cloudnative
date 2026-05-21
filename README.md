@@ -14,7 +14,7 @@ The point is **AWS deployment**. You have a bucket (or several) of COGs in S3 an
 
 ```
 AWS account + S3 COGs   →   cdk deploy   →   ALB URL
-                                              ├─ /viewer/     (Leaflet)
+                                              ├─ /viewer/     (OpenLayers)
                                               ├─ /admin/      (manage collections)
                                               └─ /mapserv?... (WMS / WFS / OGC API)
 ```
@@ -39,18 +39,17 @@ The same container also runs locally (`docker run`) for inspection and developme
 
 ## Where the index files come from
 
-Two artifacts per collection live at `/usr/src/mapfiles/`:
+One artifact per collection lives at `/usr/src/mapfiles/`:
 
 | File | Format | Used by |
 |---|---|---|
-| `<id>_tileindex.fgb` (or `<id>_tileindex_<epsg>.fgb` per group) | **FlatGeobuf** (R-tree indexed binary) | MapServer raster `TILEINDEX` — local mode only |
-| `<id>_footprints_3857.geojson` | **GeoJSON** | Browser fetches it directly for the Leaflet overlay; OGC API Features serves it |
+| `<id>_tileindex.fgb` (or `<id>_tileindex_<epsg>.fgb` per group) | **FlatGeobuf** (R-tree indexed binary) | MapServer raster `TILEINDEX` (local mode) and MapServer's WFS layer that the OpenLayers viewer queries for COG footprints |
 
 These are populated two ways:
 
 | When | Source |
 |---|---|
-| **Bundled samples** (KY 20×20 preview, NJ 2020) | Shipped in the image. Useful for first-run / `docker run` exploration without scanning anything. |
+| **Bundled sample** (NJ 2020 1ft) | Shipped in the image — `mapfiles/nj_2020_tileindex_6527.fgb`. Useful for first-run / `docker run` exploration without scanning anything. |
 | **Live deployment** | The admin UI's scan flow writes them. The scanner output and `collections.json` (synced to `s3://<config-bucket>/config/`) are the single source of truth for what the deployed WMS serves. |
 
 **Backend selection is automatic:**
@@ -225,7 +224,7 @@ docker run -d --name mapserver --rm -p 8080:80 \
 ```
 
 Open:
-- `http://localhost:8080/viewer/` — Leaflet map
+- `http://localhost:8080/viewer/` — OpenLayers map
 - `http://localhost:8080/admin/` — Collections / Runtime / Cache / Benchmark tabs (with live worker counts and an active-backend chip showing "FlatGeobuf" or "PostGIS")
 
 > **SSO/STS token expiry**: temporary credentials live ~1 hour. For longer local sessions, run [`scripts/auto_refresh_credentials.sh`](scripts/auto_refresh_credentials.sh) in the background — it re-exports fresh creds into the container's `/tmp/aws_credentials.json` every 15 minutes, which the in-container SigV4 signer picks up automatically.
