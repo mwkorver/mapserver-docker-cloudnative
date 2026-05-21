@@ -17,6 +17,7 @@ mapfiles/*_footprints_3857.geojson
 mapfiles/*_tileindex.geojson
 
 # Bundled sample tile indexes — keep tracked.
-!mapfiles/nj_2020_footprints_3857.geojson
-!mapfiles/nj_2020_sample_footprints_3857.geojson
+# (The OL viewer migration replaced the legacy *_footprints_3857.geojson
+# files with FGB tileindexes served via WFS, so only the geojson tileindex
+# referenced by the admin page is whitelisted now.)
 !mapfiles/ky_20x20_tileindex.geojson
