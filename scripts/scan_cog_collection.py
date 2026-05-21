@@ -94,7 +94,6 @@ def parse_args():
                         help="Stable collection id (kebab-case), e.g. ky-2024-3in")
     parser.add_argument("--proxy-base", default="http://localhost:8001")
     parser.add_argument("--output-native", required=True)
-    parser.add_argument("--output-web", required=True)
     parser.add_argument("--source-epsg", type=int, default=0)
     parser.add_argument("--workers", type=int, default=16)
     parser.add_argument("--limit", type=int, default=0)
@@ -691,7 +690,6 @@ def main():
             "cog_count": len(grouped_features),
         })
 
-    write_geojson(args.output_web, f"{args.collection}_footprints_3857", WEB_MERCATOR_EPSG, web_features)
     elapsed = time.time() - started
     print(
         f"Wrote {len(native_features)} features across {len(source_epsgs)} source EPSG group(s): "
@@ -782,7 +780,6 @@ def main():
             "tileindex": tileindexes[0]["tileindex"],
             "tileindex_layer_name": tileindexes[0]["tileindex_layer_name"],
             "tileindexes": tileindexes,
-            "footprints_geojson": os.path.abspath(args.output_web),
             "postgis": postgis_loaded,
             "indexed_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
         }
