@@ -587,6 +587,9 @@ done</pre>
             <label for="vsi-cache-input">VSI_CACHE_SIZE MB</label>
             <div>
               <input id="vsi-cache-input" type="number" min="0" max="65536" step="1" disabled />
+              <div style="font-size: 12px; color: var(--muted); margin-top: 4px;">
+                0 disables the per-worker /vsicurl/ cache — the nginx range-cache below already covers this.
+              </div>
             </div>
           </div>
           <div class="inline-form">
@@ -1081,7 +1084,7 @@ done</pre>
         document.getElementById("numprocs-input").disabled = !config.writeEnabled;
         document.getElementById("numprocs-write-status").textContent = config.writeEnabled ? "enabled" : "disabled";
         document.getElementById("gdal-cachemax-input").value = config.gdalCacheMaxMb ?? 128;
-        document.getElementById("vsi-cache-input").value = config.vsiCacheSizeMb ?? 32;
+        document.getElementById("vsi-cache-input").value = config.vsiCacheSizeMb ?? 0;
         document.getElementById("mapserver-debug-input").checked = Boolean(config.mapserverDebug);
         document.getElementById("gdal-cachemax-input").disabled = !config.writeEnabled;
         document.getElementById("vsi-cache-input").disabled = !config.writeEnabled;
@@ -1709,7 +1712,7 @@ done</pre>
           <td>${timeStr}</td>
           <td>${workers}</td>
           <td>${gdal} MB</td>
-          <td>${vsi} MB</td>
+          <td>${vsi === 0 ? "off" : vsi + " MB"}</td>
           <td>${payload.zoom}</td>
           <td>${payload.clear_cache ? "Yes" : "No"}</td>
           <td>${data.concurrency}</td>
