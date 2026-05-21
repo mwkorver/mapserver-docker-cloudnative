@@ -50,18 +50,15 @@ STATIC_NGINX_CACHE_SETTINGS = {
 # Fallback shape if collections.json is missing or empty. Keeps the admin
 # UI and viewer renderable on a fresh build before anyone has scanned.
 FALLBACK_VIEWER_CONFIG = {
+    "collectionId":  "",
     "collectionName": "—",
     "mapName": "imagery",
     "layerName": "—",
-    "footprintUrl": "",
     "bounds": [[37.0, -90.0], [42.0, -73.0]],
     "center": [39.5, -82.0],
     "imageryMinZoom": 14,
     "attribution": "",
 }
-FOOTPRINT_LIMIT_DEFAULT = 2000
-FOOTPRINT_LIMIT_MAX = 50000
-_FOOTPRINT_CACHE: dict[str, dict] = {}
 
 for module_path in ("/usr/src", str(Path(__file__).resolve().parent.parent)):
     if module_path not in sys.path:
@@ -151,18 +148,6 @@ def _center_from_bbox_4326(bbox):
     return [(bbox[1] + bbox[3]) / 2.0, (bbox[0] + bbox[2]) / 2.0]
 
 
-def _public_footprint_url(collection):
-    """Map an absolute footprints_geojson path to a public /mapfiles/{name} URL.
-
-    nginx has an alias `/mapfiles/` -> /usr/src/mapfiles so anything the
-    scanner writes is served back to the browser without further config.
-    """
-    raw = collection.get("footprints_geojson") or ""
-    if not raw:
-        return ""
-    basename = Path(raw).name
-    return f"/mapfiles/{basename}"
-
 
 def _collection_artifact_paths(collection):
     """Generated local files owned by a collection scan.
@@ -172,7 +157,7 @@ def _collection_artifact_paths(collection):
     container files.
     """
     paths = []
-    for key in ["tileindex", "tileindex_geojson", "footprints_geojson"]:
+    for key in ["tileindex", "tileindex_geojson"]:
         value = collection.get(key)
         if value:
             paths.append(Path(value))
@@ -200,15 +185,19 @@ def _collection_artifact_paths(collection):
 
 
 def _collection_to_viewer(collection):
-    """Convert a collections.json entry to the viewer's expected shape."""
+    """Convert a collections.json entry to the viewer's expected shape.
+
+    collectionId drives the OpenLayers viewer's WFS footprints URL:
+      /mapserv?SERVICE=WFS&TYPENAMES=cog-extents-{collectionId}&...
+    """
     bbox = collection.get("bbox_4326")
+    cid  = collection.get("id")
     return {
-        "collectionName": collection.get("id"),
-        "mapName": collection.get("map_name") or "imagery",
-        "layerName": collection.get("layer_name") or collection.get("id"),
-        "layerNames": collection.get("layer_names") or [collection.get("layer_name") or collection.get("id")],
-        "footprintUrl": _public_footprint_url(collection),
-        "footprintApiUrl": "/viewer/footprints",
+        "collectionId":  cid,
+        "collectionName": cid,
+        "mapName":  collection.get("map_name") or "imagery",
+        "layerName": collection.get("layer_name") or cid,
+        "layerNames": collection.get("layer_names") or [collection.get("layer_name") or cid],
         "bounds": _bounds_from_bbox_4326(bbox) or FALLBACK_VIEWER_CONFIG["bounds"],
         "center": _center_from_bbox_4326(bbox) or FALLBACK_VIEWER_CONFIG["center"],
         "imageryMinZoom": collection.get("min_zoom") or 14,
@@ -217,100 +206,6 @@ def _collection_to_viewer(collection):
         "attribution": collection.get("attribution", ""),
     }
 
-
-def _flatten_coordinates(coords, points):
-    if not isinstance(coords, list):
-        return points
-    if len(coords) >= 2 and isinstance(coords[0], (int, float)) and isinstance(coords[1], (int, float)):
-        points.append((float(coords[0]), float(coords[1])))
-        return points
-    for child in coords:
-        _flatten_coordinates(child, points)
-    return points
-
-
-def _feature_bbox(feature):
-    points = _flatten_coordinates((feature.get("geometry") or {}).get("coordinates"), [])
-    if not points:
-        return None
-    xs = [point[0] for point in points]
-    ys = [point[1] for point in points]
-    return [min(xs), min(ys), max(xs), max(ys)]
-
-
-def _bbox_intersects(a, b):
-    return bool(a and b and a[0] <= b[2] and a[2] >= b[0] and a[1] <= b[3] and a[3] >= b[1])
-
-
-def _load_footprints(collection):
-    path = Path(collection.get("footprints_geojson") or "")
-    if not path.exists():
-        raise FileNotFoundError(f"footprints file not found: {path}")
-    cache_key = str(path)
-    stat = path.stat()
-    cached = _FOOTPRINT_CACHE.get(cache_key)
-    if cached and cached.get("mtime") == stat.st_mtime and cached.get("size") == stat.st_size:
-        return cached
-
-    data = json.loads(path.read_text())
-    features = data.get("features") or []
-    indexed_features = []
-    for feature in features:
-        indexed_features.append({"feature": feature, "bbox": _feature_bbox(feature)})
-    cached = {
-        "mtime": stat.st_mtime,
-        "size": stat.st_size,
-        "crs": data.get("crs"),
-        "total": len(features),
-        "features": indexed_features,
-    }
-    _FOOTPRINT_CACHE[cache_key] = cached
-    return cached
-
-
-def footprints_for_active_collection(query):
-    doc = _read_collections()
-    active = _active_collection(doc.get("collections", []))
-    if active is None:
-        return {"type": "FeatureCollection", "features": []}
-
-    params = parse_qs(query)
-    bbox_values = params.get("bbox", [""])[0].split(",")
-    if len(bbox_values) != 4:
-        raise ValueError("bbox query parameter is required as minx,miny,maxx,maxy")
-    try:
-        bbox = [float(value) for value in bbox_values]
-    except ValueError as exc:
-        raise ValueError("bbox values must be numbers") from exc
-
-    try:
-        limit = int(params.get("limit", [str(FOOTPRINT_LIMIT_DEFAULT)])[0])
-    except ValueError as exc:
-        raise ValueError("limit must be an integer") from exc
-    limit = max(1, min(limit, FOOTPRINT_LIMIT_MAX))
-
-    cached = _load_footprints(active)
-    matches = []
-    matched_count = 0
-    for item in cached["features"]:
-        if _bbox_intersects(item["bbox"], bbox):
-            matched_count += 1
-            if len(matches) < limit:
-                matches.append(item["feature"])
-
-    return {
-        "type": "FeatureCollection",
-        "crs": cached.get("crs"),
-        "features": matches,
-        "properties": {
-            "collection": active.get("id"),
-            "matched": matched_count,
-            "returned": len(matches),
-            "total": cached["total"],
-            "limit": limit,
-            "truncated": matched_count > len(matches),
-        },
-    }
 
 
 def write_json(handler, status, payload):
@@ -918,7 +813,6 @@ def _run_scan(job_id, payload):
     job = _JOBS[job_id]
     collection_id = payload["collection_id"]
     out_native = MAPFILES_DIR / f"{collection_id}_tileindex.fgb"
-    out_web = MAPFILES_DIR / f"{collection_id}_footprints_3857.geojson"
 
     cmd = [
         "python3", str(SCAN_SCRIPT),
@@ -927,7 +821,6 @@ def _run_scan(job_id, payload):
         "--region", payload.get("region", "us-west-2"),
         "--collection", collection_id,
         "--output-native", str(out_native),
-        "--output-web", str(out_web),
         "--collections-file", str(COLLECTIONS_FILE),
         "--label", payload.get("label", collection_id),
         "--attribution", payload.get("attribution", ""),
@@ -1042,14 +935,6 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/viewer-config":
             try:
                 write_json(self, 200, viewer_config())
-            except Exception as exc:
-                write_error(self, 500, str(exc))
-            return
-        if path == "/viewer-footprints":
-            try:
-                write_json(self, 200, footprints_for_active_collection(parsed.query))
-            except ValueError as exc:
-                write_error(self, 400, str(exc))
             except Exception as exc:
                 write_error(self, 500, str(exc))
             return
@@ -1187,7 +1072,6 @@ class Handler(BaseHTTPRequestHandler):
                     print(f"WARN: failed to delete {artifact_path}: {exc}", file=sys.stderr)
 
             deleted_jobs = delete_collection_jobs(collection_id)
-            _FOOTPRINT_CACHE.clear()
 
             regenerate_mapfile()
             restart_mapserver_group()
