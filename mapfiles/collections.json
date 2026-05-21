@@ -2,49 +2,6 @@
   "version": 1,
   "collections": [
     {
-      "id": "ky-2024-3in",
-      "layer_name": "ky-2024",
-      "map_name": "ky-imagery",
-      "label": "KyFromAbove 2024 Season 1 (3 in)",
-      "attribution": "KyFromAbove / Commonwealth of Kentucky",
-      "enabled": true,
-      "min_zoom": 18,
-      "max_zoom": 22,
-      "draw_order": 20,
-      "source": {
-        "bucket": "kyfromabove",
-        "prefix": "imagery/orthos/Phase3/KY_KYAPED_2024_Season1_3IN/",
-        "region": "us-west-2",
-        "access_mode": "unsigned",
-        "requester_pays": false
-      },
-      "native_epsg": 3089,
-      "cog_count": 400,
-      "bbox_4326": [
-        -85.5063,
-        37.8079,
-        -85.2515,
-        38.0876
-      ],
-      "extent_3857": [
-        -9523010,
-        4551082,
-        -9484253,
-        4590002
-      ],
-      "extent_native": [
-        4980000,
-        3815000,
-        5080000,
-        3915000
-      ],
-      "postgis": false,
-      "indexed_at": "2026-05-01T00:00:00Z",
-      "native_zoom": 18,
-      "tileindex": "/usr/src/mapfiles/ky_20x20_tileindex_3089.fgb",
-      "tileindex_layer_name": "ky_20x20_tileindex_3089"
-    },
-    {
       "id": "nj-2020-1ft",
       "layer_name": "nj-2020",
       "map_name": "nj-imagery",
@@ -91,48 +48,6 @@
         "SCALE=0,65535",
         "RESAMPLE=AVERAGE"
       ]
-    },
-    {
-      "id": "ky-2024-season13in",
-      "layer_name": "ky-2024-season13in",
-      "map_name": "ky-2024-season13in-imagery",
-      "label": "ky-2024-season13in",
-      "attribution": "",
-      "enabled": true,
-      "min_zoom": 16,
-      "max_zoom": 22,
-      "draw_order": 10,
-      "source": {
-        "bucket": "kyfromabove",
-        "prefix": "imagery/orthos/Phase3/KY_KYAPED_2024_Season1_3IN/",
-        "region": "us-west-2",
-        "access_mode": "unsigned",
-        "requester_pays": false
-      },
-      "native_epsg": 3089,
-      "cog_count": 24395,
-      "bbox_4326": [
-        -89.5855,
-        36.4831,
-        -83.1167,
-        39.1557
-      ],
-      "extent_3857": [
-        -9972617,
-        4367307,
-        -9252507,
-        4743995
-      ],
-      "extent_native": [
-        3795000.0,
-        3345000.0,
-        5680000.0,
-        4310000.0
-      ],
-      "postgis": false,
-      "indexed_at": "2026-05-14T18:26:49Z",
-      "tileindex": "/usr/src/mapfiles/ky-2024-season13in_tileindex.fgb",
-      "tileindex_layer_name": "ky-2024-season13in_tileindex_3089"
     }
   ]
 }
