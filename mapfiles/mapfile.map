@@ -4,7 +4,7 @@ MAP
   NAME "imagery"
   STATUS ON
   SIZE 256 256
-  EXTENT -9972617 4367307 -8223562 5067461
+  EXTENT -8412731 4709462 -8223562 5067461
   UNITS METERS
   IMAGETYPE png24
   IMAGECOLOR 255 255 255
@@ -35,7 +35,7 @@ MAP
       "ows_title"                      "Cloud-Native Imagery Server"
       "ows_abstract"                   "Multi-collection COG service via MapServer"
       "ows_onlineresource"             "http://localhost/mapserv"
-      "ows_srs"                        "EPSG:3089 EPSG:3857 EPSG:4326 EPSG:6527"
+      "ows_srs"                        "EPSG:3857 EPSG:4326 EPSG:6527"
       "ows_enable_request"             "*"
       "oga_enable_request"             "*"
       "wms_allow_getmap_without_styles" "true"
@@ -108,118 +108,6 @@ MAP
     METADATA
       "ows_title"       "New Jersey 2020 1-foot Imagery"
       "ows_attribution" "NJ Office of GIS / NJGIN"
-    END
-  END
-
-  LAYER
-    NAME "cog-extents-ky-2024-season13in"
-    TYPE POLYGON
-    STATUS ON
-    TEMPLATE "unused"
-    EXTENT 3795000.0 3345000.0 5680000.0 4310000.0
-    CONNECTIONTYPE OGR
-    CONNECTION "/usr/src/mapfiles/ky-2024-season13in_tileindex.fgb"
-    DATA "ky-2024-season13in_tileindex_3089"
-    PROJECTION
-      "init=epsg:3089"
-    END
-    METADATA
-      "ows_title"          "ky-2024-season13in footprints"
-      "ows_srs"            "EPSG:3857 EPSG:4326"
-      "gml_featureid"      "file_name"
-      "gml_geometries"     "msGeometry"
-      "gml_include_items"  "all"
-      "ows_enable_request"             "*"
-      "wfs_enable_request"             "*"
-      "oga_enable_request"             "*"
-      "wfs_getfeature_formatlist"      "geojson,gml3,gml2"
-      "ows_maxfeatures"                "50000"
-    END
-  END
-
-  LAYER
-    NAME "cog-tileindex-ky-2024-season13in"
-    TYPE POLYGON
-    STATUS OFF
-    EXTENT 3795000.0 3345000.0 5680000.0 4310000.0
-    CONNECTIONTYPE OGR
-    CONNECTION "/usr/src/mapfiles/ky-2024-season13in_tileindex.fgb"
-    DATA "ky-2024-season13in_tileindex_3089"
-    PROJECTION
-      "init=epsg:3089"
-    END
-  END
-
-  LAYER
-    NAME "ky-2024-season13in"
-    TYPE RASTER
-    STATUS ON
-    TILEINDEX "cog-tileindex-ky-2024-season13in"
-    TILEITEM "location"
-    PROCESSING "BANDS=1,2,3"
-    PROCESSING "RESAMPLE=AVERAGE"
-    PROJECTION
-      "init=epsg:3089"
-    END
-    METADATA
-      "ows_title"       "ky-2024-season13in"
-      "ows_attribution" ""
-    END
-  END
-
-  LAYER
-    NAME "cog-extents-ky-2024-3in"
-    TYPE POLYGON
-    STATUS ON
-    TEMPLATE "unused"
-    EXTENT 4980000 3815000 5080000 3915000
-    CONNECTIONTYPE OGR
-    CONNECTION "/usr/src/mapfiles/ky_20x20_tileindex_3089.fgb"
-    DATA "ky_20x20_tileindex_3089"
-    PROJECTION
-      "init=epsg:3089"
-    END
-    METADATA
-      "ows_title"          "KyFromAbove 2024 Season 1 (3 in) footprints"
-      "ows_srs"            "EPSG:3857 EPSG:4326"
-      "gml_featureid"      "file_name"
-      "gml_geometries"     "msGeometry"
-      "gml_include_items"  "all"
-      "ows_enable_request"             "*"
-      "wfs_enable_request"             "*"
-      "oga_enable_request"             "*"
-      "wfs_getfeature_formatlist"      "geojson,gml3,gml2"
-      "ows_maxfeatures"                "50000"
-    END
-  END
-
-  LAYER
-    NAME "cog-tileindex-ky-2024-3in"
-    TYPE POLYGON
-    STATUS OFF
-    EXTENT 4980000 3815000 5080000 3915000
-    CONNECTIONTYPE OGR
-    CONNECTION "/usr/src/mapfiles/ky_20x20_tileindex_3089.fgb"
-    DATA "ky_20x20_tileindex_3089"
-    PROJECTION
-      "init=epsg:3089"
-    END
-  END
-
-  LAYER
-    NAME "ky-2024"
-    TYPE RASTER
-    STATUS ON
-    TILEINDEX "cog-tileindex-ky-2024-3in"
-    TILEITEM "location"
-    PROCESSING "BANDS=1,2,3"
-    PROCESSING "RESAMPLE=AVERAGE"
-    PROJECTION
-      "init=epsg:3089"
-    END
-    METADATA
-      "ows_title"       "KyFromAbove 2024 Season 1 (3 in)"
-      "ows_attribution" "KyFromAbove / Commonwealth of Kentucky"
     END
   END
 
