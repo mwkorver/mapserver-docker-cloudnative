@@ -33,7 +33,12 @@ MAX_WORKERS = int(os.environ.get("MAPSERVER_MAX_NUMPROCS", "32"))
 DEFAULT_RUNTIME = {
     "activeCollection": "",
     "gdalCacheMaxMb": 128,
-    "vsiCacheSizeMb": 32,
+    # 0 disables the per-worker /vsicurl/ byte-range cache.  The shared
+    # nginx proxy_cache (4 GB on disk, 1 entry covers all workers) makes
+    # the per-worker RAM cache redundant — measured slight latency win
+    # and frees (numprocs * VSI_CACHE_SIZE) of RAM.  Set > 0 if running
+    # the image without the nginx range-cache layer.
+    "vsiCacheSizeMb": 0,
     "mapserverDebug": False,
     "nginxCacheMaxSize": "20g",
     "nginxCacheTtl": "24h",

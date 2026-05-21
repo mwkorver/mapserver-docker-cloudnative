@@ -25,6 +25,13 @@ OUTPUT_PATH = Path(os.environ.get("MAPFILE_OUTPUT", "/usr/src/mapfiles/mapfile.m
 PUBLIC_HOST = os.environ.get("PUBLIC_HOST", "localhost")
 DEBUG_LEVEL = os.environ.get("MS_DEBUGLEVEL", "0")
 GDAL_CACHEMAX = os.environ.get("GDAL_CACHEMAX", "128")
+# Per-worker /vsicurl/ byte-range cache.  Disabled by default because the
+# in-container nginx proxy_cache (4 GB on disk, shared across all FastCGI
+# workers) already serves repeat byte-range reads — a second per-worker
+# RAM cache is redundant and consumes (numprocs * VSI_CACHE_SIZE) of RAM
+# that could go to GDAL_CACHEMAX instead.  Set VSI_CACHE=TRUE if running
+# the image without the nginx cache layer in front.
+VSI_CACHE = os.environ.get("VSI_CACHE", "FALSE")
 VSI_CACHE_SIZE = os.environ.get("VSI_CACHE_SIZE", "33554432")
 
 DEFAULT_EXTENT_3857 = [-14000000, 2500000, -7000000, 6000000]  # roughly continental US
@@ -142,7 +149,7 @@ def header(extent, srs_set):
     lines += [
         '  CONFIG "AWS_NO_SIGN_REQUEST" "YES"',
         f'  CONFIG "GDAL_CACHEMAX" "{GDAL_CACHEMAX}"',
-        '  CONFIG "VSI_CACHE" "TRUE"',
+        f'  CONFIG "VSI_CACHE" "{VSI_CACHE}"',
         f'  CONFIG "VSI_CACHE_SIZE" "{VSI_CACHE_SIZE}"',
         '  CONFIG "GDAL_DISABLE_READDIR_ON_OPEN" "TRUE"',
         '  CONFIG "GDAL_HTTP_MULTIPLEX" "YES"',
