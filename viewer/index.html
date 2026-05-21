@@ -2,12 +2,23 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Kentucky Imagery Viewer</title>
+  <title>Imagery Viewer</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <!-- OpenLayers assets served from this repo's GitHub Pages site.
+       Pinned to a folder-versioned path (ol-10.0/) so bumping OL is an
+       additive change — drop new files under ol-10.1/ and change the
+       href/src below.  SRI hashes guard against tampering or stale CDN
+       cache returning the wrong content. -->
+  <link rel="stylesheet"
+        href="https://mwkorver.github.io/mapserver-docker-cloudnative/viewer/vendor/ol-10.0/ol.css"
+        integrity="sha384-Jpg1uvTciFJuHq+90Ly0/2SKRT9yS5OhbIN5FuFoFWji9fc44ok8xxO88CJi8Z5W"
+        crossorigin="anonymous" />
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body { height: 100%; font-family: sans-serif; }
+
+    /* suppress OL's built-in zoom + rotate controls */
+    .ol-zoom, .ol-rotate { display: none; }
 
     #toolbar {
       position: absolute;
@@ -56,7 +67,11 @@
 
     #map { height: 100%; width: 100%; }
 
-    .layer-info {
+    #layer-info {
+      position: absolute;
+      top: 60px;
+      right: 10px;
+      z-index: 1000;
       background: white;
       border-radius: 6px;
       box-shadow: 0 2px 8px rgba(0,0,0,0.3);
@@ -64,51 +79,19 @@
       font-size: 12px;
       line-height: 1.5;
       min-width: 160px;
+      pointer-events: none;
     }
-    .layer-info .layer-row {
+    #layer-info .layer-row {
       display: flex;
       align-items: center;
       gap: 6px;
       color: #444;
     }
-    .layer-info .swatch {
+    #layer-info .swatch {
       width: 12px;
       height: 12px;
       border-radius: 2px;
       flex-shrink: 0;
-    }
-
-    .cog-label {
-      background: rgba(255, 255, 255, 0.8);
-      border: 1px solid rgba(224, 96, 32, 0.7);
-      color: #7a2f10;
-      font-size: 10px;
-      font-weight: 600;
-      padding: 1px 3px;
-      pointer-events: none;
-      white-space: nowrap;
-    }
-
-    .cog-labels-hidden .cog-label {
-      display: none;
-    }
-
-    .tile-time-cell {
-      align-items: center;
-      border: 1px solid rgba(0, 0, 0, 0.2);
-      box-sizing: border-box;
-      display: flex;
-      justify-content: center;
-      pointer-events: none;
-    }
-
-    .tile-time-label {
-      background: rgba(0, 0, 0, 0.72);
-      border-radius: 3px;
-      color: white;
-      font: 600 12px/1.2 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      padding: 3px 5px;
-      text-shadow: 0 1px 1px rgba(0, 0, 0, 0.6);
     }
 
     /* Performance panel */
@@ -228,6 +211,7 @@
     <button id="perf-toggle">Perf</button>
   </div>
   <div id="map"></div>
+  <div id="layer-info"></div>
 
   <div id="perf-panel">
     <div id="perf-header">
@@ -257,378 +241,438 @@
           <div class="label">MapServer</div><div><a id="mapserv-link" href="/mapserv" target="_blank" rel="noopener">/mapserv</a></div>
           <div class="label">Capabilities</div><div><a id="capabilities-link" href="/mapserv?SERVICE=WMS&amp;VERSION=1.3.0&amp;REQUEST=GetCapabilities" target="_blank" rel="noopener">GetCapabilities</a></div>
           <div class="label">Config</div><div><a id="viewer-config-link" href="/viewer/config.json" target="_blank" rel="noopener">/viewer/config.json</a></div>
-          <div class="label">Footprints</div><div><a id="footprints-link" href="/viewer/footprints" target="_blank" rel="noopener">current bbox</a></div>
+          <div class="label">Footprints</div><div><a id="footprints-link" href="#" target="_blank" rel="noopener">current bbox (WFS)</a></div>
         </div>
       </div>
     </div>
   </div>
 
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://mwkorver.github.io/mapserver-docker-cloudnative/viewer/vendor/ol-10.0/ol.js"
+          integrity="sha384-H9f6d9zpuIdeGwVsGIPSbRgWKZ8WRk2C1K7GxlC61fe5qjRCL/5Qvp2wUvUVDS8v"
+          crossorigin="anonymous"></script>
   <script>
     if (window.location.protocol === 'file:') {
       window.location.replace('http://localhost:8080/viewer/');
     }
 
-    const PERF_API_URL = '';
-
-    function loadViewerConfig() {
+    /* ---- load viewer config (sync XHR at startup) ---- */
+    const VIEWER_CONFIG = (function () {
       try {
-        const request = new XMLHttpRequest();
-        request.open('GET', '/viewer/config.json', false);
-        request.send(null);
-        if (request.status >= 200 && request.status < 300) {
-          return JSON.parse(request.responseText);
-        }
-      } catch (error) {
-        console.warn('viewer config unavailable; using defaults', error);
-      }
+        const xhr = new XMLHttpRequest();
+        xhr.open('GET', '/viewer/config.json', false);
+        xhr.send(null);
+        if (xhr.status >= 200 && xhr.status < 300) return JSON.parse(xhr.responseText);
+      } catch (e) { console.warn('viewer config unavailable; using defaults', e); }
       return {};
-    }
+    })();
 
-    const VIEWER_CONFIG = loadViewerConfig();
-    const IMAGERY_MIN_ZOOM = VIEWER_CONFIG.imageryMinZoom || 18;
-    const IMAGERY_MAX_ZOOM = VIEWER_CONFIG.imageryMaxZoom || Math.max(22, IMAGERY_MIN_ZOOM + 1);
-    const NATIVE_ZOOM = VIEWER_CONFIG.nativeZoom || IMAGERY_MIN_ZOOM + 4;
+    /* ---- constants derived from viewer config ---- */
+    const IMAGERY_MIN_ZOOM  = VIEWER_CONFIG.imageryMinZoom || 18;
+    const IMAGERY_MAX_ZOOM  = VIEWER_CONFIG.imageryMaxZoom || Math.max(22, IMAGERY_MIN_ZOOM + 1);
+    const NATIVE_ZOOM       = VIEWER_CONFIG.nativeZoom || (IMAGERY_MIN_ZOOM + 4);
     const COG_LABEL_MIN_ZOOM = 15;
-    const FOOTPRINT_RENDER_LIMIT = 50000;
-    const FOOTPRINT_LABEL_LIMIT = 500;
-    const WMS_LAYER_NAME = VIEWER_CONFIG.layerName || 'ky-2024';
-    const WMS_LAYER_NAMES = Array.isArray(VIEWER_CONFIG.layerNames) && VIEWER_CONFIG.layerNames.length
-      ? VIEWER_CONFIG.layerNames
-      : [WMS_LAYER_NAME];
-    const MAP_NAME = VIEWER_CONFIG.mapName || 'ky-imagery';
-    const FOOTPRINT_API_URL = VIEWER_CONFIG.footprintApiUrl || '/viewer/footprints';
-    const ATTRIBUTION = VIEWER_CONFIG.attribution || 'Imagery collection';
-    const DEFAULT_WMS_URL = window.location.origin + '/mapserv';
-    const CAPABILITIES_URL = `${DEFAULT_WMS_URL}?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetCapabilities`;
-    const DEFAULT_VIEW = { center: VIEWER_CONFIG.center || [37.937085, -85.372578], zoom: NATIVE_ZOOM - 1 };
-    const map = L.map('map', { maxZoom: IMAGERY_MAX_ZOOM }).setView(DEFAULT_VIEW.center, DEFAULT_VIEW.zoom);
+    // collectionId drives the WFS layer name: cog-extents-{collectionId}
+    const COLLECTION_ID     = VIEWER_CONFIG.collectionId || VIEWER_CONFIG.collectionName || '';
+    const WMS_LAYER_NAME    = VIEWER_CONFIG.layerName || 'imagery';
+    const WMS_LAYER_NAMES   = (Array.isArray(VIEWER_CONFIG.layerNames) && VIEWER_CONFIG.layerNames.length)
+      ? VIEWER_CONFIG.layerNames : [WMS_LAYER_NAME];
+    const ATTRIBUTION       = VIEWER_CONFIG.attribution || '';
+    const DEFAULT_WMS_URL   = window.location.origin + '/mapserv';
+    const CAPABILITIES_URL  = DEFAULT_WMS_URL + '?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetCapabilities';
+    const PERF_API_URL      = '';   // set by deployment; empty = disabled
 
-    function setViewerLink(id, href, label) {
-      const link = document.getElementById(id);
-      link.href = href;
-      if (label) link.textContent = label;
-    }
+    // viewer_config.center is [lat, lon] (Leaflet convention)
+    const centerLatLon = VIEWER_CONFIG.center || [37.937085, -85.372578];
+    const initialCenter = ol.proj.fromLonLat([centerLatLon[1], centerLatLon[0]]);
+    const initialZoom   = NATIVE_ZOOM - 1;
 
-    function refreshViewerLinks() {
-      const bbox = currentViewBounds(true).map(value => value.toFixed(2)).join(',');
-      const footprintsUrl = `${window.location.origin}${FOOTPRINT_API_URL}?bbox=${encodeURIComponent(bbox)}&limit=${FOOTPRINT_RENDER_LIMIT}`;
-      document.getElementById('collection-label').textContent = VIEWER_CONFIG.collectionName || WMS_LAYER_NAME;
-      document.getElementById('viewer-layer-name').textContent = WMS_LAYER_NAMES.join(', ');
-      setViewerLink('mapserv-link', DEFAULT_WMS_URL, '/mapserv');
-      setViewerLink('capabilities-link', CAPABILITIES_URL, 'GetCapabilities');
-      setViewerLink('viewer-config-link', `${window.location.origin}/viewer/config.json`, '/viewer/config.json');
-      setViewerLink('footprints-link', footprintsUrl, 'current bbox');
-    }
+    /* ---- mutable state ---- */
+    let currentWmsSource = null;
+    let wfsAbortCtrl     = null;         // AbortController for in-flight WFS request
+    const tileTimers  = new WeakMap();   // tile object → start ms
+    const timingFeatures = new Map();    // tileKey → ol.Feature
+    const timingValues   = new Map();    // tileKey → label text
+    const clientSamples  = [];           // rolling window of ms
 
-    const LayerInfoControl = L.Control.extend({
-      options: { position: 'topright' },
-      onAdd: function() {
-        const div = L.DomUtil.create('div', 'layer-info');
-        this._div = div;
-        this.update();
-        return div;
-      },
-      update: function(count) {
-        const zoom = map.getZoom();
-        const countStr = count !== undefined ? ' (' + count + ')' : '';
-        if (zoom < IMAGERY_MIN_ZOOM) {
-          this._div.innerHTML =
-            '<div class="layer-row"><span class="swatch" style="background:#e06020;opacity:0.6;border:1px solid #e06020"></span>COG Footprints' + countStr + '</div>' +
-            '<div class="layer-row" style="color:#aaa;padding-left:18px">zoom in for imagery</div>' +
-            '<div class="layer-row" style="color:#888;padding-left:18px;font-size:11px">zoom: ' + zoom + '</div>';
-        } else {
-          this._div.innerHTML =
-            '<div class="layer-row"><span class="swatch" style="background:#e06020;opacity:0.6;border:1px solid #e06020"></span>COG Footprints' + countStr + '</div>' +
-            '<div class="layer-row"><span class="swatch" style="background:#4a9eff"></span>WMS: ' + WMS_LAYER_NAMES.join(', ') + '</div>' +
-            '<div class="layer-row" style="color:#888;padding-left:18px;font-size:11px">zoom: ' + zoom + '</div>';
-        }
-      }
-    });
-
-    const layerInfo = new LayerInfoControl();
-    layerInfo.addTo(map);
-
-    const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-      maxNativeZoom: 19,
-      maxZoom: 22,
-      opacity: 0.4
-    });
-    osm.addTo(map);
-
-    let footprintsLayer = null;
-    let footprintData = null;
-    let footprintRequestId = 0;
-    let ogcApiBase = null;
-    const canvasRenderer = L.canvas();
-
-    function isWebMercatorGeoJson(data) {
-      const name = data && data.crs && data.crs.properties && data.crs.properties.name;
-      return /EPSG(?::|::)3857/i.test(name || '');
-    }
-
-    function coordsToLatLng3857(coords) {
-      return L.CRS.EPSG3857.unproject(L.point(coords[0], coords[1]));
-    }
-
-    function flattenCoordinates(coords, points) {
-      if (!Array.isArray(coords)) return points;
-      if (typeof coords[0] === 'number' && typeof coords[1] === 'number') {
-        points.push(coords);
-        return points;
-      }
-      coords.forEach(child => flattenCoordinates(child, points));
-      return points;
-    }
-
-    function geometryBounds(feature) {
-      const points = flattenCoordinates(feature.geometry && feature.geometry.coordinates, []);
-      if (!points.length) return null;
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-      points.forEach(([x, y]) => {
-        minX = Math.min(minX, x);
-        minY = Math.min(minY, y);
-        maxX = Math.max(maxX, x);
-        maxY = Math.max(maxY, y);
-      });
-      return [minX, minY, maxX, maxY];
-    }
-
-    function currentViewBounds(useWebMercator) {
-      const bounds = map.getBounds();
-      if (!useWebMercator) {
-        return [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()];
-      }
-      const sw = L.CRS.EPSG3857.project(bounds.getSouthWest());
-      const ne = L.CRS.EPSG3857.project(bounds.getNorthEast());
-      return [sw.x, sw.y, ne.x, ne.y];
-    }
-
-    function intersects(a, b) {
-      return a && b && a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1];
-    }
-
-    function renderFootprints() {
-      if (!footprintData) return;
-      const features = Array.isArray(footprintData.features) ? footprintData.features : [];
-      const useWebMercator = isWebMercatorGeoJson(footprintData);
-      const rendered = features;
-      const labelsEnabled = map.getZoom() >= COG_LABEL_MIN_ZOOM && rendered.length <= FOOTPRINT_LABEL_LIMIT;
-      const data = {
-        type: 'FeatureCollection',
-        crs: footprintData.crs,
-        features: rendered
-      };
-
-      if (footprintsLayer) {
-        footprintsLayer.clearLayers();
-        footprintsLayer.options.labelsEnabled = labelsEnabled;
-        footprintsLayer.addData(data);
-      } else {
-        footprintsLayer = L.geoJSON(data, {
-          renderer: canvasRenderer,
-          interactive: false,
-          coordsToLatLng: useWebMercator ? coordsToLatLng3857 : undefined,
-          labelsEnabled,
-          style: { color: '#e06020', weight: 1, fillOpacity: 0.05, fillColor: '#e06020' },
-          onEachFeature: bindCogLabel
-        });
-        footprintsLayer.addTo(map);
-      }
-
-      const props = footprintData.properties || {};
-      const total = props.total || rendered.length;
-      const matched = props.matched || rendered.length;
-      const returned = props.returned || rendered.length;
-      const countText = props.truncated
-        ? `${returned}/${matched} visible, ${total} total`
-        : `${returned}/${total}`;
-      layerInfo.update(countText);
-    }
-
-    function fetchFootprints() {
-      const bbox = currentViewBounds(true).map(value => value.toFixed(2)).join(',');
-      const url = `${FOOTPRINT_API_URL}?bbox=${encodeURIComponent(bbox)}&limit=${FOOTPRINT_RENDER_LIMIT}`;
-      refreshViewerLinks();
-      const requestId = ++footprintRequestId;
-      fetch(url)
-        .then(r => {
-          if (!r.ok) throw new Error('HTTP ' + r.status);
-          return r.json();
-        })
-        .then(data => {
-          if (requestId !== footprintRequestId) return;
-          footprintData = data;
-          renderFootprints();
-        })
-        .catch(err => console.warn('COG footprints error:', err));
-    }
-
-    function bindCogLabel(feature, layer) {
-      if (!footprintsLayer || !footprintsLayer.options.labelsEnabled) return;
-      const props = feature.properties || {};
-      const label = props.file_name || (props.key ? props.key.split('/').pop() : props.location);
-      if (!label) return;
-      layer.bindTooltip(label, {
-        permanent: true,
-        direction: 'center',
-        className: 'cog-label'
-      });
-    }
-
-    function updateCogLabelVisibility() {
-      map.getContainer().classList.toggle('cog-labels-hidden', map.getZoom() < COG_LABEL_MIN_ZOOM);
-    }
-
-    function onMoveEnd() {
-      layerInfo.update();
-      updateCogLabelVisibility();
-      fetchFootprints();
-    }
-
-    map.on('moveend', onMoveEnd);
-    updateCogLabelVisibility();
-
-    // WMS imagery layer — shown at the imagery threshold, with client-side tile timing.
-    let imageryLayer = null;
-    let tileTimeLayer = null;
-    const tileTimeCells = new Map();           // z/x/y -> label element
-    const tileTimeValues = new Map();          // z/x/y -> label text
-    const tileTimers = new WeakMap();        // tile -> startMs
-    const clientSamples = [];                // rolling window of ms
-
-    function tileKey(coords) {
-      return coords.z + '/' + coords.x + '/' + coords.y;
-    }
-
-    function isOverNativeZoom(coords) {
-      return coords && coords.z > NATIVE_ZOOM;
-    }
-
-    function tileLabelText(coords, value) {
-      if (isOverNativeZoom(coords)) {
-        const overBy = coords.z - NATIVE_ZOOM;
-        const prefix = `z${coords.z} over +${overBy}`;
-        return value ? `${prefix}\n${value}` : prefix;
-      }
-      return value || 'loading…';
-    }
-
-    function setTileTimeLabel(coords, value) {
-      const key = tileKey(coords);
-      tileTimeValues.set(key, value);
-      const label = tileTimeCells.get(key);
-      if (label) label.textContent = tileLabelText(coords, value);
-    }
+    /* ---- helpers ---- */
+    function tileKey(coord) { return coord[0] + '/' + coord[1] + '/' + coord[2]; }
 
     function formatTileTime(ms) {
       return ms >= 1000 ? (ms / 1000).toFixed(2) + ' s' : Math.round(ms) + ' ms';
     }
 
-    const TileTimeLayer = L.GridLayer.extend({
-      createTile: function(coords) {
-        const tile = document.createElement('div');
-        tile.className = 'tile-time-cell';
-        const label = document.createElement('div');
-        label.className = 'tile-time-label';
-        label.textContent = tileLabelText(coords, tileTimeValues.get(tileKey(coords)));
-        tile.appendChild(label);
-        return tile;
-      }
+    function tileExtent3857(tileCoord, source) {
+      const tg = (source && source.getTileGrid && source.getTileGrid())
+        || ol.tilegrid.createXYZ({ maxZoom: 28 });
+      return tg.getTileCoordExtent(tileCoord);
+    }
+
+    /* ---- styles ---- */
+    // Footprint stroke is always visible.  At high zoom (>= FOOTPRINT_FILL_MIN_ZOOM)
+    // we also paint a per-COG hashed-hue fill so the COG body is visible even
+    // when its boundary is off-screen — important when zooming into a place
+    // where 4 COGs meet and all 4 edges are off the viewport.  Adjacent COGs
+    // hash to different hues (deterministic from file_name), so the seam
+    // reads as a color discontinuity.
+    // We skip the fill at low zoom because thousands of polygons stack alpha
+    // at sub-pixel edges and bury the basemap.
+    // Footprints: stroke only, no fill.  The user wants to see seams between
+    // COGs but not have the imagery tinted.
+    const FOOTPRINT_STROKE = new ol.style.Stroke({ color: '#e06020', width: 1 });
+    const FOOTPRINT_BASE   = new ol.style.Style({ stroke: FOOTPRINT_STROKE });
+
+    // Labels are on a SEPARATE layer (labelsLayer) with minZoom set at the layer
+    // level, not inside a style function.  That way OL's renderer skips the layer
+    // entirely below COG_LABEL_MIN_ZOOM — no style-function cache to worry about.
+    const FOOTPRINT_LABEL_LIMIT = 500;
+    let footprintCount = 0;
+
+    function labelStyle(feature) {
+      if (footprintCount > FOOTPRINT_LABEL_LIMIT) return null;
+      const props = feature.getProperties();
+      const label = props.file_name || (props.location ? props.location.split('/').pop() : '') || '';
+      if (!label) return null;
+      return new ol.style.Style({
+        text: new ol.style.Text({
+          text: label,
+          font: '600 10px sans-serif',
+          fill: new ol.style.Fill({ color: '#7a2f10' }),
+          backgroundFill: new ol.style.Fill({ color: 'rgba(255,255,255,0.8)' }),
+          backgroundStroke: new ol.style.Stroke({ color: 'rgba(224,96,32,0.7)', width: 1 }),
+          padding: [1, 3, 1, 3],
+          overflow: true,
+        }),
+      });
+    }
+
+    const TIMING_BORDER = new ol.style.Stroke({ color: 'rgba(0,0,0,0.2)', width: 1 });
+
+    function timingStyle(feature) {
+      const coord  = feature.get('coord');
+      const text   = feature.get('timingText') || 'loading…';
+      const z      = coord ? coord[0] : 0;
+      const over   = z - NATIVE_ZOOM;
+      const label  = over > 0 ? ('z' + z + ' over +' + over + '\n' + text) : text;
+      return [
+        new ol.style.Style({ stroke: TIMING_BORDER }),
+        new ol.style.Style({
+          text: new ol.style.Text({
+            text: label,
+            font: '600 12px/1.2 system-ui,sans-serif',
+            fill: new ol.style.Fill({ color: 'white' }),
+            backgroundFill: new ol.style.Fill({ color: 'rgba(0,0,0,0.72)' }),
+            backgroundStroke: new ol.style.Stroke({ color: 'transparent', width: 0 }),
+            padding: [3, 5, 3, 5],
+          }),
+        }),
+      ];
+    }
+
+    /* ---- sources & layers ---- */
+    // Full-opacity OSM stays useful at every zoom: it's the basemap below
+    // z14 (no imagery yet) and peeks through gaps in imagery coverage above.
+    // Imagery uses RGBA so empty areas are transparent rather than white.
+    const osmLayer = new ol.layer.Tile({
+      source: new ol.source.OSM(),
     });
 
-    function buildTileTimeLayer() {
-      return new TileTimeLayer({
-        minZoom: IMAGERY_MIN_ZOOM,
+    // footprintsSource uses OL's built-in bbox loader strategy.
+    // wfsLoader is called automatically whenever the map viewport moves to an
+    // extent that hasn't been loaded yet.  Calling source.clear() also resets
+    // OL's loaded-extent tracking, so the next render re-fires the loader.
+    const footprintsSource = new ol.source.Vector({
+      loader:   COLLECTION_ID ? wfsLoader : undefined,
+      strategy: ol.loadingstrategy.bbox,
+    });
+    // Footprints render at every zoom level (no minZoom).  Only the WMS
+    // imagery layer is zoom-limited.  At world view individual COGs are
+    // sub-pixel but the cluster is still informative.
+    const footprintsLayer = new ol.layer.Vector({
+      source: footprintsSource,
+      style:  FOOTPRINT_BASE,
+    });
+
+    // labelsSource is populated from featuresloadend on footprintsSource.
+    // Keeping it separate gives explicit, synchronous control over clearing.
+    const labelsSource = new ol.source.Vector();
+    const labelsLayer  = new ol.layer.Vector({
+      source:  labelsSource,
+      style:   labelStyle,
+      minZoom: COG_LABEL_MIN_ZOOM,
+    });
+
+    // Sync labels whenever OL finishes loading a batch of footprint features.
+    footprintsSource.on('featuresloadend', function (evt) {
+      footprintCount = footprintsSource.getFeatures().length;
+      labelsSource.clear();
+      if (footprintCount <= FOOTPRINT_LABEL_LIMIT) {
+        var labelFeats = (evt.features || []).map(function (f) {
+          var center = ol.extent.getCenter(f.getGeometry().getExtent());
+          var lf = new ol.Feature({ geometry: new ol.geom.Point(center) });
+          lf.setProperties(f.getProperties());
+          return lf;
+        });
+        labelsSource.addFeatures(labelFeats);
+      }
+      updateLayerInfo(footprintCount);
+      refreshViewerLinks();
+    });
+
+    const timingSource = new ol.source.Vector();
+    const timingLayer  = new ol.layer.Vector({
+      source: timingSource,
+      style: timingStyle,
+      minZoom: IMAGERY_MIN_ZOOM,
+      updateWhileAnimating: false,
+      updateWhileInteracting: false,
+    });
+
+    // WMS layer — source is swapped by applyUrl(); created here with default URL
+    const wmsLayer = new ol.layer.Tile({ minZoom: IMAGERY_MIN_ZOOM });
+
+    /* ---- map ---- */
+    // eslint-disable-next-line no-var
+    var map = new ol.Map({      // var so footprintStyle / timingStyle close over it
+      target: 'map',
+      controls: [],
+      view: new ol.View({
+        center: initialCenter,
+        zoom: initialZoom,
         maxZoom: IMAGERY_MAX_ZOOM,
-        tileSize: 256,
-        pane: 'markerPane'
-      }).on('tileunload', (e) => {
-        tileTimeCells.delete(tileKey(e.coords));
-      }).on('tileload', (e) => {
-        const key = tileKey(e.coords);
-        const label = e.tile.querySelector('.tile-time-label');
-        tileTimeCells.set(key, label);
-        label.textContent = tileLabelText(e.coords, tileTimeValues.get(key));
-      });
+        constrainResolution: true,   // snap to integer zoom levels (like Leaflet default)
+      }),
+      // layer order: OSM → WMS → timing overlay → footprint outlines → labels (top)
+      layers: [osmLayer, wmsLayer, timingLayer, footprintsLayer, labelsLayer],
+    });
+
+    /* ---- WMS tile-timing callbacks ---- */
+    function onTileLoadStart(evt) {
+      tileTimers.set(evt.tile, performance.now());
+      const key = tileKey(evt.tile.tileCoord);
+      timingValues.set(key, null);   // mark as in-flight
+      // create placeholder feature for the tile cell
+      const extent = tileExtent3857(evt.tile.tileCoord, currentWmsSource);
+      let feat = timingFeatures.get(key);
+      if (!feat) {
+        feat = new ol.Feature({ geometry: ol.geom.Polygon.fromExtent(extent) });
+        timingSource.addFeature(feat);
+        timingFeatures.set(key, feat);
+      }
+      feat.set('coord', evt.tile.tileCoord);
+      feat.set('timingText', 'loading…');
     }
 
-    function buildWmsLayer(url) {
-      const layer = L.tileLayer.wms(url, {
-        layers: WMS_LAYER_NAMES.join(','),
-        format: 'image/png',
-        transparent: false,
-        version: '1.3.0',
-        minZoom: IMAGERY_MIN_ZOOM,
-        maxZoom: IMAGERY_MAX_ZOOM,
-        keepBuffer: 1,
-        updateWhenIdle: true,
-        updateWhenZooming: false,
-        attribution: ATTRIBUTION
-      });
-      layer.on('tileloadstart', (e) => {
-        tileTimers.set(e.tile, performance.now());
-        setTileTimeLabel(e.coords, 'loading…');
-      });
-      layer.on('tileload', (e) => {
-        const start = tileTimers.get(e.tile);
-        if (start === undefined) return;
-        const ms = performance.now() - start;
-        const text = formatTileTime(ms);
-        setTileTimeLabel(e.coords, text);
-        clientSamples.push(ms);
-        if (clientSamples.length > 100) clientSamples.shift();
-        renderClientStats();
-      });
-      layer.on('tileerror', (e) => {
-        setTileTimeLabel(e.coords, 'error');
-      });
-      return layer;
+    function onTileLoadEnd(evt) {
+      const start = tileTimers.get(evt.tile);
+      if (start === undefined) return;
+      const ms = performance.now() - start;
+      const text = formatTileTime(ms);
+      const key = tileKey(evt.tile.tileCoord);
+      timingValues.set(key, text);
+      const feat = timingFeatures.get(key);
+      if (feat) feat.set('timingText', text);
+      clientSamples.push(ms);
+      if (clientSamples.length > 100) clientSamples.shift();
+      renderClientStats();
     }
 
+    function onTileLoadError(evt) {
+      const key = tileKey(evt.tile.tileCoord);
+      const feat = timingFeatures.get(key);
+      if (feat) feat.set('timingText', 'error');
+    }
+
+    /* ---- WMS source builder ---- */
+    function buildWmsSource(url) {
+      const src = new ol.source.TileWMS({
+        url: url,
+        params: { LAYERS: WMS_LAYER_NAMES.join(','), FORMAT: 'image/png', VERSION: '1.3.0' },
+        serverType: 'mapserver',
+        // hidpi: false → request 256x256 @ MAP_RESOLUTION=90 instead of
+        // 512x512 @ MAP_RESOLUTION=180 on retina displays.  For aerial
+        // imagery the visual difference is negligible but server cost
+        // and bandwidth drop ~4x.
+        hidpi: false,
+        attributions: ATTRIBUTION,
+      });
+      src.on('tileloadstart', onTileLoadStart);
+      src.on('tileloadend',   onTileLoadEnd);
+      src.on('tileloaderror', onTileLoadError);
+      return src;
+    }
+
+    /* ---- footprints via WFS — OL-native loader ---- */
+
+    // buildWfsUrl is still used by refreshViewerLinks() to show the live URL.
+    function viewExtent4326() {
+      const ext3857 = map.getView().calculateExtent(map.getSize());
+      return ol.proj.transformExtent(ext3857, 'EPSG:3857', 'EPSG:4326');
+    }
+
+    function buildWfsUrl(ext4326) {
+      // WFS 2.0.0 + EPSG:4326: axis order is lat,lon (OGC standard).
+      const [minLon, minLat, maxLon, maxLat] = ext4326;
+      return '/mapserv?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature'
+        + '&TYPENAMES=cog-extents-' + encodeURIComponent(COLLECTION_ID)
+        + '&OUTPUTFORMAT=geojson'
+        + '&SRSNAME=EPSG%3A4326'
+        + '&BBOX=' + minLat.toFixed(6) + ',' + minLon.toFixed(6) + ','
+                   + maxLat.toFixed(6) + ',' + maxLon.toFixed(6) + ',EPSG%3A4326'
+        // High enough to cover the largest collection in one fetch (KY
+        // Season1 3in: 24,395 COGs).  Bbox still scopes the response —
+        // small viewports get small responses; world view gets the whole
+        // collection (a few MB) which is one-time on load.
+        + '&COUNT=50000';
+    }
+
+    // OL calls this whenever the footprintsSource needs features for a new extent.
+    // RETURNING A PROMISE is critical in OL 10+: with the callback API,
+    // OL only fires the loadend event but does NOT add the features to the
+    // source.  In Promise mode, OL handles addFeatures() automatically.
+    function wfsLoader(extent, resolution, projection) {
+      if (wfsAbortCtrl) wfsAbortCtrl.abort();
+      wfsAbortCtrl = new AbortController();
+      const ext4326 = ol.proj.transformExtent(extent, projection, 'EPSG:4326');
+      const url = buildWfsUrl(ext4326);
+      return fetch(url, { signal: wfsAbortCtrl.signal })
+        .then(function (r) {
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.json();
+        })
+        .then(function (geojson) {
+          return new ol.format.GeoJSON().readFeatures(geojson, {
+            dataProjection: 'EPSG:4326',
+            featureProjection: projection,
+          });
+        })
+        .catch(function (err) {
+          if (err.name === 'AbortError') return [];   // swallow aborts silently
+          console.warn('WFS loader error:', err);
+          throw err;                                  // propagate real errors
+        });
+    }
+
+    function clearFootprints() {
+      if (wfsAbortCtrl) { wfsAbortCtrl.abort(); wfsAbortCtrl = null; }
+      footprintCount = 0;
+      labelsSource.clear();
+      // refresh() (not clear()!) is what resets OL's loadedExtentsRtree —
+      // clear() only removes the features.  Without refresh() the next
+      // render thinks the current extent is already loaded and never
+      // re-fires wfsLoader.
+      footprintsSource.refresh();
+    }
+
+    /* ---- layer info panel ---- */
+    function updateLayerInfo(returned, total) {
+      const zoom     = Math.round(map.getView().getZoom() || 0);
+      const showWms  = zoom >= IMAGERY_MIN_ZOOM;
+      let countStr   = '';
+      if (returned !== undefined) {
+        countStr = (total != null && total !== returned)
+          ? ' (' + returned + '/' + total + ')'
+          : ' (' + returned + ')';
+      }
+      let html = '<div class="layer-row">'
+        + '<span class="swatch" style="background:#e06020;opacity:0.6;border:1px solid #e06020"></span>'
+        + 'COG Footprints' + countStr
+        + '</div>';
+      if (showWms) {
+        html += '<div class="layer-row">'
+          + '<span class="swatch" style="background:#4a9eff"></span>'
+          + 'WMS: ' + WMS_LAYER_NAMES.join(', ')
+          + '</div>';
+      } else {
+        html += '<div class="layer-row" style="color:#aaa;padding-left:18px">zoom in for imagery</div>';
+      }
+      html += '<div class="layer-row" style="color:#888;padding-left:18px;font-size:11px">zoom: ' + zoom + '</div>';
+      document.getElementById('layer-info').innerHTML = html;
+    }
+
+    /* ---- viewer links ---- */
+    function refreshViewerLinks() {
+      document.getElementById('collection-label').textContent =
+        VIEWER_CONFIG.collectionName || WMS_LAYER_NAME;
+      document.getElementById('viewer-layer-name').textContent = WMS_LAYER_NAMES.join(', ');
+
+      var mapservLink = document.getElementById('mapserv-link');
+      mapservLink.href = DEFAULT_WMS_URL;
+
+      var capsLink = document.getElementById('capabilities-link');
+      capsLink.href = CAPABILITIES_URL;
+
+      var cfgLink = document.getElementById('viewer-config-link');
+      cfgLink.href = window.location.origin + '/viewer/config.json';
+
+      if (COLLECTION_ID) {
+        var wfsUrl = buildWfsUrl(viewExtent4326());
+        var fpLink = document.getElementById('footprints-link');
+        fpLink.href = wfsUrl;
+      }
+    }
+
+    /* ---- map events ---- */
+    map.on('moveend', function () {
+      // Prune timing features that are out of view OR at a stale zoom level.
+      // Without the zoom check, large tiles from z17 persist visually when
+      // zoomed in to z19 because their extents still intersect the viewport.
+      var viewExt  = map.getView().calculateExtent(map.getSize());
+      var viewZoom = Math.round(map.getView().getZoom() || 0);
+      timingFeatures.forEach(function (feat, key) {
+        var geom      = feat.getGeometry();
+        var coord     = feat.get('coord');
+        var outOfView = geom && !ol.extent.intersects(viewExt, geom.getExtent());
+        var wrongZoom = coord && coord[0] !== viewZoom;
+        if (outOfView || wrongZoom) {
+          timingSource.removeFeature(feat);
+          timingFeatures.delete(key);
+          timingValues.delete(key);
+        }
+      });
+      updateLayerInfo();
+      refreshViewerLinks();
+    });
+
+    /* ---- toolbar: apply URL ---- */
     function applyUrl() {
-      const url = document.getElementById('wms-url').value.trim();
+      var url = document.getElementById('wms-url').value.trim();
       if (!url) return;
-      ogcApiBase = new URL(url).origin + '/mapserv/' + MAP_NAME + '/ogcapi';
-      if (imageryLayer) map.removeLayer(imageryLayer);
-      if (tileTimeLayer) map.removeLayer(tileTimeLayer);
-      tileTimeCells.clear();
-      tileTimeValues.clear();
-      imageryLayer = buildWmsLayer(url);
-      tileTimeLayer = buildTileTimeLayer();
-      imageryLayer.addTo(map);
-      tileTimeLayer.addTo(map);
-      fetchFootprints();
+
+      timingSource.clear();
+      timingFeatures.clear();
+      timingValues.clear();
+      clearFootprints();
+
+      currentWmsSource = buildWmsSource(url);
+      wmsLayer.setSource(currentWmsSource);
     }
 
     document.getElementById('wms-url').value = DEFAULT_WMS_URL;
     document.getElementById('apply-btn').addEventListener('click', applyUrl);
-    document.getElementById('wms-url').addEventListener('keydown', (e) => {
+    document.getElementById('wms-url').addEventListener('keydown', function (e) {
       if (e.key === 'Enter') applyUrl();
     });
 
-    // ---------------- performance panel ----------------
-    const panel = document.getElementById('perf-panel');
-    const perfBody = {
+    /* ---- performance panel ---- */
+    var panel = document.getElementById('perf-panel');
+    var perfBody = {
       server: document.getElementById('server-stats'),
       client: document.getElementById('client-stats'),
       recent: document.getElementById('recent-requests'),
     };
 
-    document.getElementById('perf-toggle').addEventListener('click', () => {
+    document.getElementById('perf-toggle').addEventListener('click', function () {
       panel.classList.toggle('open');
       if (panel.classList.contains('open')) refreshServerStats();
     });
-    document.getElementById('perf-close').addEventListener('click', () => {
+    document.getElementById('perf-close').addEventListener('click', function () {
       panel.classList.remove('open');
     });
     document.getElementById('perf-refresh').addEventListener('click', refreshServerStats);
 
-    function pct(sortedArr, p) {
-      if (sortedArr.length === 0) return null;
-      const i = Math.min(sortedArr.length - 1, Math.floor(sortedArr.length * p));
-      return sortedArr[i];
+    function pct(sorted, p) {
+      if (!sorted.length) return null;
+      return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))];
     }
 
     function fmtMs(s) {
@@ -637,31 +681,27 @@
       return s.toFixed(2) + ' s';
     }
 
-    function statsBlock(samples, opts = {}) {
-      // samples are in seconds for server, ms for client (opts.ms)
-      const sec = opts.ms ? samples.map(x => x / 1000) : samples;
-      if (sec.length === 0) return '<div class="empty">no samples yet</div>';
-      const sorted = [...sec].sort((a,b) => a - b);
-      const sum = sorted.reduce((a,b) => a + b, 0);
-      const mean = sum / sorted.length;
-      const median = pct(sorted, 0.5);
-      const p95 = pct(sorted, 0.95);
-      const p99 = pct(sorted, 0.99);
-      return '<div class="perf-stats">' +
-        '<div class="label">samples</div><div class="value">' + sorted.length + '</div>' +
-        '<div class="label">min</div><div class="value">' + fmtMs(sorted[0]) + '</div>' +
-        '<div class="label">mean</div><div class="value">' + fmtMs(mean) + '</div>' +
-        '<div class="label">median</div><div class="value">' + fmtMs(median) + '</div>' +
-        '<div class="label">p95</div><div class="value">' + fmtMs(p95) + '</div>' +
-        '<div class="label">p99</div><div class="value">' + fmtMs(p99) + '</div>' +
-        '<div class="label">max</div><div class="value">' + fmtMs(sorted[sorted.length-1]) + '</div>' +
-        '</div>';
+    function statsBlock(samples, opts) {
+      var ms   = opts && opts.ms;
+      var sec  = ms ? samples.map(function (x) { return x / 1000; }) : samples;
+      if (!sec.length) return '<div class="empty">no samples yet</div>';
+      var sorted = sec.slice().sort(function (a, b) { return a - b; });
+      var sum    = sorted.reduce(function (a, b) { return a + b; }, 0);
+      var mean   = sum / sorted.length;
+      return '<div class="perf-stats">'
+        + '<div class="label">samples</div><div class="value">' + sorted.length + '</div>'
+        + '<div class="label">min</div><div class="value">'    + fmtMs(sorted[0]) + '</div>'
+        + '<div class="label">mean</div><div class="value">'   + fmtMs(mean) + '</div>'
+        + '<div class="label">median</div><div class="value">' + fmtMs(pct(sorted, 0.5)) + '</div>'
+        + '<div class="label">p95</div><div class="value">'    + fmtMs(pct(sorted, 0.95)) + '</div>'
+        + '<div class="label">p99</div><div class="value">'    + fmtMs(pct(sorted, 0.99)) + '</div>'
+        + '<div class="label">max</div><div class="value">'    + fmtMs(sorted[sorted.length - 1]) + '</div>'
+        + '</div>';
     }
 
     function renderClientStats() {
-      perfBody.client.innerHTML =
-        statsBlock(clientSamples, { ms: true }) +
-        '<div class="perf-meta">rolling window of last 100 tiles loaded by Leaflet</div>';
+      perfBody.client.innerHTML = statsBlock(clientSamples, { ms: true })
+        + '<div class="perf-meta">rolling window of last 100 tiles loaded</div>';
     }
 
     function renderRecent(requests) {
@@ -669,23 +709,23 @@
         perfBody.recent.innerHTML = '<div class="empty">no GetMap in window</div>';
         return;
       }
-      const rows = requests.slice(0, 20).map(r => {
-        const t = r.upstream_time_s;
-        const cls = t > 2 ? 'slow' : (t < 0.5 ? 'ok' : '');
-        const stamp = r.timestamp ? r.timestamp.replace('T',' ').slice(11, 19) : '';
-        const kb = r.size ? (r.size / 1024).toFixed(0) : '0';
-        return '<tr>' +
-          '<td>' + stamp + '</td>' +
-          '<td class="num ' + cls + '">' + t.toFixed(3) + 's</td>' +
-          '<td class="num">' + kb + ' KB</td>' +
-          '</tr>';
+      var rows = requests.slice(0, 20).map(function (r) {
+        var t   = r.upstream_time_s;
+        var cls = t > 2 ? 'slow' : (t < 0.5 ? 'ok' : '');
+        var stamp = r.timestamp ? r.timestamp.replace('T', ' ').slice(11, 19) : '';
+        var kb    = r.size ? (r.size / 1024).toFixed(0) : '0';
+        return '<tr>'
+          + '<td>' + stamp + '</td>'
+          + '<td class="num ' + cls + '">' + t.toFixed(3) + 's</td>'
+          + '<td class="num">' + kb + ' KB</td>'
+          + '</tr>';
       }).join('');
-      perfBody.recent.innerHTML =
-        '<table class="req-table">' +
-          '<thead><tr><th>time</th><th class="num">srv ms</th><th class="num">size</th></tr></thead>' +
-          '<tbody>' + rows + '</tbody>' +
-        '</table>' +
-        '<div class="perf-meta">latest 20 of ' + requests.length + ' GetMap in last hour</div>';
+      perfBody.recent.innerHTML
+        = '<table class="req-table">'
+        + '<thead><tr><th>time</th><th class="num">srv ms</th><th class="num">size</th></tr></thead>'
+        + '<tbody>' + rows + '</tbody>'
+        + '</table>'
+        + '<div class="perf-meta">latest 20 of ' + requests.length + ' GetMap in last hour</div>';
     }
 
     async function refreshServerStats() {
@@ -695,22 +735,22 @@
       }
       perfBody.server.innerHTML = '<div class="empty">querying CloudWatch…</div>';
       try {
-        const t0 = performance.now();
-        const res = await fetch(PERF_API_URL);
+        var t0  = performance.now();
+        var res = await fetch(PERF_API_URL);
         if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
-        const queryMs = (performance.now() - t0).toFixed(0);
-        const samples = data.requests.map(r => r.upstream_time_s);
-        perfBody.server.innerHTML =
-          statsBlock(samples) +
-          '<div class="perf-meta">' + data.count + ' GetMap requests · ' +
-          'window ' + data.window_hours + 'h · query ' + queryMs + 'ms</div>';
+        var data = await res.json();
+        var queryMs = (performance.now() - t0).toFixed(0);
+        var samples = data.requests.map(function (r) { return r.upstream_time_s; });
+        perfBody.server.innerHTML = statsBlock(samples)
+          + '<div class="perf-meta">' + data.count + ' GetMap requests · '
+          + 'window ' + data.window_hours + 'h · query ' + queryMs + 'ms</div>';
         renderRecent(data.requests);
       } catch (err) {
         perfBody.server.innerHTML = '<div class="empty">error: ' + err.message + '</div>';
       }
     }
 
+    /* ---- initial render ---- */
     renderClientStats();
     applyUrl();
   </script>

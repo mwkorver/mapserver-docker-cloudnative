@@ -7,6 +7,7 @@ test-results/
 playwright-report/
 cdk/.home/
 cdk/outputs.json
+.claude/
 
 # Scanner-produced geojson outputs from the admin UI's "Add a collection"
 # flow. collections.json is the source of truth; re-running the scanner

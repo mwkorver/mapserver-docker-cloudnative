@@ -102,11 +102,24 @@ def header(extent, srs_set):
         '  END',
         '',
         '  OUTPUTFORMAT',
-        '    NAME png24',
+        '    NAME "png24"',
         '    DRIVER "AGG/PNG"',
         '    MIMETYPE "image/png"',
-        '    IMAGEMODE RGB',
+        # IMAGEMODE RGBA so MapServer can return transparent pixels where no
+        # COG covers the request bbox.  With RGB the empty area would be
+        # filled with IMAGECOLOR (white), hiding the OSM basemap underneath
+        # the imagery layer in the viewer.
+        '    IMAGEMODE RGBA',
+        '    TRANSPARENT ON',
         '    EXTENSION "png"',
+        '  END',
+        '',
+        '  OUTPUTFORMAT',
+        '    NAME "geojson"',
+        '    DRIVER "OGR/GEOJSON"',
+        '    MIMETYPE "application/json; subtype=geojson"',
+        '    FORMATOPTION "STORAGE=stream"',
+        '    FORMATOPTION "FORM=SIMPLE"',
         '  END',
         '',
         '  WEB',
@@ -141,24 +154,34 @@ def header(extent, srs_set):
 
 
 def footprints_layer(c, db_conn):
+    """WFS/OGC-API Features polygon layer for COG footprints.
+
+    PostGIS mode  → uses geom (EPSG:3857) from cog_index table.
+    OGR/local mode → uses the native-CRS FlatGeobuf tileindex directly;
+                     MapServer reprojects to the requested SRSNAME on the fly.
+    """
     cid = c["id"]
     label = c["label"]
-    extent = c.get("extent_3857") or DEFAULT_EXTENT_3857
     use_postgis = bool(db_conn) and c.get("postgis", False)
     if use_postgis:
+        extent = c.get("extent_3857") or DEFAULT_EXTENT_3857
         conn_block = [
             '    CONNECTIONTYPE POSTGIS',
             f'    CONNECTION "{db_conn}"',
             f'    DATA "geom FROM (SELECT id,file_name,location,geom FROM cog_index WHERE collection_id=\'{cid}\') AS sub USING UNIQUE id USING SRID=3857"',
         ]
+        proj_epsg = 3857
     else:
-        geojson = c["footprints_geojson"]
-        layer_name = ogr_layer_name(geojson)
+        # Use the FGB tileindex (native CRS) — no separate footprints GeoJSON needed.
+        tileindex = c.get("tileindex") or c.get("tileindex_geojson")
+        layer_name = c.get("tileindex_layer_name") or ogr_layer_name(tileindex)
+        extent = c.get("extent_native") or c.get("extent_3857") or DEFAULT_EXTENT_3857
         conn_block = [
             '    CONNECTIONTYPE OGR',
-            f'    CONNECTION "{geojson}"',
+            f'    CONNECTION "{tileindex}"',
             f'    DATA "{layer_name}"',
         ]
+        proj_epsg = c.get("native_epsg", 3857)
     return [
         '',
         '  LAYER',
@@ -169,7 +192,7 @@ def footprints_layer(c, db_conn):
         f'    EXTENT {extent[0]} {extent[1]} {extent[2]} {extent[3]}',
         *conn_block,
         '    PROJECTION',
-        '      "init=epsg:3857"',
+        f'      "init=epsg:{proj_epsg}"',
         '    END',
         '    METADATA',
         f'      "ows_title"          "{label} footprints"',
@@ -177,10 +200,13 @@ def footprints_layer(c, db_conn):
         '      "gml_featureid"      "file_name"',
         '      "gml_geometries"     "msGeometry"',
         '      "gml_include_items"  "all"',
-        '      "ows_enable_request" "*"',
-        '      "wfs_enable_request" "*"',
-        '      "oga_enable_request" "*"',
-        '      "ows_maxfeatures"    "10000"',
+        '      "ows_enable_request"             "*"',
+        '      "wfs_enable_request"             "*"',
+        '      "oga_enable_request"             "*"',
+        '      "wfs_getfeature_formatlist"      "geojson,gml3,gml2"',
+        # Must exceed the largest collection's cog_count so a wide-bbox
+        # query (e.g. world view) can return every feature in one go.
+        '      "ows_maxfeatures"                "50000"',
         '    END',
         '  END',
     ]
