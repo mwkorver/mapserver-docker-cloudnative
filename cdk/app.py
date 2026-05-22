@@ -21,6 +21,9 @@ cpu = int(app.node.try_get_context("mapserver_cpu") or 4096)
 memory = int(app.node.try_get_context("mapserver_memory_limit_mib") or 8192)
 ephemeral_storage_gib = int(app.node.try_get_context("mapserver_ephemeral_storage_gib") or 21)
 
+task_role_arn = app.node.try_get_context("task_role_arn")
+execution_role_arn = app.node.try_get_context("execution_role_arn")
+
 MapserverStack(
     app,
     "MapserverStack",
@@ -34,6 +37,8 @@ MapserverStack(
     cpu=cpu,
     memory=memory,
     ephemeral_storage_gib=ephemeral_storage_gib,
+    task_role_arn=task_role_arn,
+    execution_role_arn=execution_role_arn,
 )
 
 app.synth()

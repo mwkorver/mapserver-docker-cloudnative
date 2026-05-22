@@ -48,9 +48,19 @@ class MapserverStack(Stack):
         cpu: int = 4096,
         memory: int = 8192,
         ephemeral_storage_gib: int = 21,
+        task_role_arn: str = None,
+        execution_role_arn: str = None,
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
+
+        if not task_role_arn:
+            raise ValueError(
+                "A pre-created Fargate Task Role is required for deployment. "
+                "Please provision one out-of-band and pass it via the "
+                "'-c task_role_arn=<arn>' context parameter. "
+                "See iam/README.md for instructions."
+            )
 
         # `cdk deploy -c parked=true` scales Fargate to 0 and stops RDS.
         # Default is unparked (running). Re-deploy without the flag to wake.
@@ -328,6 +338,16 @@ class MapserverStack(Stack):
         # --- ECS cluster, task, service -----------------------------------
         cluster = ecs.Cluster(self, "Cluster", cluster_name="mapserver", vpc=vpc)
 
+        # Import pre-created out-of-band IAM roles
+        task_role = iam.Role.from_role_arn(
+            self, "ImportedTaskRole", task_role_arn, mutable=False
+        )
+        execution_role = None
+        if execution_role_arn:
+            execution_role = iam.Role.from_role_arn(
+                self, "ImportedExecutionRole", execution_role_arn, mutable=False
+            )
+
         task_def = ecs.FargateTaskDefinition(
             self,
             "TaskDef",
@@ -339,31 +359,15 @@ class MapserverStack(Stack):
                 cpu_architecture=ecs.CpuArchitecture.ARM64,
                 operating_system_family=ecs.OperatingSystemFamily.LINUX,
             ),
+            task_role=task_role,
+            execution_role=execution_role,
         )
 
-        # Task role: read/write S3 for durable config, read-only imagery,
-        # plus read the DB secret.
-        # GDAL still reads /vsicurl/http://localhost:8001/...; nginx handles
-        # range-aware cache lookup, then the local signer uses this task role
-        # only on cache misses against private S3.
-        config_bucket.grant_read_write(task_def.task_role, "config/*")
-        imagery_bucket.grant_read(task_def.task_role, "*")
-        db.secret.grant_read(task_def.task_role)
-
-        # Allow the scanner to list and read any S3 bucket.
-        # Cross-account S3 access (public-dataset and requester-pays buckets)
-        # requires an explicit ALLOW in the IAM identity policy even when the
-        # bucket policy grants broad access — IAM evaluates both, and an
-        # implicit deny on the identity side wins.  The scanner may target any
-        # public-data bucket (NAIP, NLCD, Copernicus, …) so we grant s3:Get*
-        # and s3:ListBucket on *.  This is read-only and scoped to S3 only.
-        task_def.task_role.add_to_policy(
-            iam.PolicyStatement(
-                actions=["s3:GetObject", "s3:GetObjectTagging",
-                         "s3:GetBucketLocation", "s3:ListBucket"],
-                resources=["*"],
-            )
-        )
+        # Grant read access to the database credentials secret.
+        # Since the database secret is created within this stack (mutable),
+        # we can attach a resource-based policy to it at deploy time
+        # to authorize the imported task role.
+        db.secret.grant_read(task_role)
 
         container = task_def.add_container(
             "mapserver",
