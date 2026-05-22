@@ -614,8 +614,6 @@
     /* ---- map events ---- */
     map.on('moveend', function () {
       // Prune timing features that are out of view OR at a stale zoom level.
-      // Without the zoom check, large tiles from z17 persist visually when
-      // zoomed in to z19 because their extents still intersect the viewport.
       var viewExt  = map.getView().calculateExtent(map.getSize());
       var viewZoom = Math.round(map.getView().getZoom() || 0);
       timingFeatures.forEach(function (feat, key) {
@@ -629,6 +627,17 @@
           timingValues.delete(key);
         }
       });
+
+      // Force a tile re-fetch so the overlay timing labels appear on
+      // every revisit, not just first load.  OL otherwise serves tiles
+      // from its in-memory cache with no tileloadstart/end events, so
+      // the overlay would be blank for a previously-loaded view.
+      // The refetch is a fresh WMS render (MapServer sends no
+      // Cache-Control) — but with a warm GDAL block cache + nginx
+      // range cache it is typically much faster than the cold load,
+      // which is the number worth seeing.
+      if (currentWmsSource) currentWmsSource.refresh();
+
       updateLayerInfo();
       refreshViewerLinks();
     });
