@@ -343,15 +343,17 @@ See [`.github/workflows/build-push.yml`](.github/workflows/build-push.yml) for t
 Set in the generated mapfile (`mapfile_generator.py` reads env vars):
 
 ```
-CONFIG "GDAL_CACHEMAX"            "128"          # MB block cache
-CONFIG "VSI_CACHE_SIZE"           "33554432"     # 32 MB per worker (nginx does the heavy lifting)
-CONFIG "GDAL_DISABLE_READDIR_ON_OPEN" "TRUE"
-CONFIG "GDAL_HTTP_MULTIPLEX"      "YES"          # HTTP/2 multiplexing for S3
-CONFIG "GDAL_HTTP_VERSION"        "2"
-CONFIG "GDAL_HTTP_MERGE_CONSECUTIVE_RANGES" "YES"
+CONFIG "GDAL_CACHEMAX"                      "128"          # MB block cache
+CONFIG "VSI_CACHE"                          "FALSE"        # RAM VSI cache disabled by default (nginx does the heavy lifting)
+CONFIG "VSI_CACHE_SIZE"                     "33554432"     # 32 MB per worker (ignored unless VSI_CACHE is TRUE)
+CONFIG "GDAL_DISABLE_READDIR_ON_OPEN"       "TRUE"         # Avoid costly ListBucket operations on S3
+CONFIG "GDAL_HTTP_MERGE_CONSECUTIVE_RANGES" "YES"          # Merge consecutive byte reads
 ```
 
-Per-worker VSI cache is kept small because the nginx range-cache sits in front and is shared across all workers — that's where the win is. Tunable live via the admin UI's Runtime tab; no redeploy needed.
+> [!NOTE]
+> **HTTP/2 Multiplexing:** `GDAL_HTTP_MULTIPLEX` and `GDAL_HTTP_VERSION` are intentionally omitted. Because GDAL talks locally to the container's Nginx loopback range-cache (`http://localhost:8001`), which operates on plaintext HTTP/1.1, the loopback connection negotiates back down to 1.1 automatically. The actual latency-sensitive remote connection (from the proxy signer to S3) is governed by the signer's own HTTP/2 client, not by GDAL.
+
+Per-worker VSI cache is kept small (or disabled) because the nginx range-cache sits in front and is shared across all workers — that's where the win is. Tunable live via the admin UI's Runtime tab; no redeploy needed.
 
 For best performance, **deploy in the same AWS region as your S3 bucket**. Cross-region (or worse, local-to-S3) latency on range-request-heavy COG access is brutal.
 
