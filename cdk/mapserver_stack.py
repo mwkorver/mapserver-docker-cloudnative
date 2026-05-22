@@ -244,7 +244,8 @@ class MapserverStack(Stack):
                     ],
                 ),
             ),
-            timeout=Duration.minutes(2),
+            # 5 min: retry budget is ~90 s (8 attempts × backoff); give headroom.
+            timeout=Duration.minutes(5),
             memory_size=512,
             vpc=vpc,
             vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
@@ -262,6 +263,12 @@ class MapserverStack(Stack):
             },
         )
 
+        # Ensure the Lambda function is not invoked until the RDS instance and
+        # its security-group ingress rule are both in place. Without this,
+        # CloudFormation may fire the custom resource trigger while the SG rule
+        # is still being applied in parallel, causing a connection timeout.
+        init_fn.node.add_dependency(db)
+
         provider = cr.Provider(self, "DbInitProvider", on_event_handler=init_fn)
         # Bump `version` to force the custom resource to re-run on a deploy
         # (e.g., after editing INIT_SQL in the lambda).
@@ -269,7 +276,7 @@ class MapserverStack(Stack):
             self,
             "DbInitTrigger",
             service_token=provider.service_token,
-            properties={"version": "5"},  # multi-collection cog_index schema
+            properties={"version": "6"},  # retry logic + explicit DB dependency
         )
 
         # COG loading is no longer a one-shot lambda. The admin scan flow
