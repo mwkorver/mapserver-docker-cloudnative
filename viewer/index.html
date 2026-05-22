@@ -17,8 +17,10 @@
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body { height: 100%; font-family: sans-serif; }
 
-    /* suppress OL's built-in zoom + rotate controls */
-    .ol-zoom, .ol-rotate { display: none; }
+    /* suppress OL's rotate control; keep the zoom control (added below) */
+    .ol-rotate { display: none; }
+    /* nudge the zoom control down so it clears the centered top toolbar */
+    .ol-zoom { top: 60px; left: 8px; }
 
     #toolbar {
       position: absolute;
@@ -434,7 +436,7 @@
     // eslint-disable-next-line no-var
     var map = new ol.Map({      // var so footprintStyle / timingStyle close over it
       target: 'map',
-      controls: [],
+      controls: [new ol.control.Zoom()],   // +/- buttons, top-left
       view: new ol.View({
         center: initialCenter,
         zoom: initialZoom,
