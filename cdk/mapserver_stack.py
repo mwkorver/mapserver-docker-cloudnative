@@ -350,6 +350,21 @@ class MapserverStack(Stack):
         imagery_bucket.grant_read(task_def.task_role, "*")
         db.secret.grant_read(task_def.task_role)
 
+        # Allow the scanner to list and read any S3 bucket.
+        # Cross-account S3 access (public-dataset and requester-pays buckets)
+        # requires an explicit ALLOW in the IAM identity policy even when the
+        # bucket policy grants broad access — IAM evaluates both, and an
+        # implicit deny on the identity side wins.  The scanner may target any
+        # public-data bucket (NAIP, NLCD, Copernicus, …) so we grant s3:Get*
+        # and s3:ListBucket on *.  This is read-only and scoped to S3 only.
+        task_def.task_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["s3:GetObject", "s3:GetObjectTagging",
+                         "s3:GetBucketLocation", "s3:ListBucket"],
+                resources=["*"],
+            )
+        )
+
         container = task_def.add_container(
             "mapserver",
             image=ecs.ContainerImage.from_ecr_repository(ecr_repo, image_tag),
