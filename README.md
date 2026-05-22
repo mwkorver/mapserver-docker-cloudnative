@@ -112,17 +112,23 @@ The intended path.
 
 ### Step 1 — Create the long-lived resources
 
-These live outside the CDK stack so they survive a `cdk destroy`:
+These live outside the CDK stack so they survive a `cdk destroy` (promoting separation of concerns):
 
 ```bash
 export AWS_ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
 export AWS_REGION=us-west-2
 
+# 1. Create the ECR Repository
 aws ecr create-repository \
   --repository-name mapserver-docker-cloudnative \
   --region $AWS_REGION
 
+# 2. Create the S3 Configuration Bucket
 aws s3 mb s3://mapserver-docker-cloudnative-${AWS_ACCOUNT}-${AWS_REGION} --region $AWS_REGION
+
+# 3. Create the ECS IAM Roles
+# Follow the step-by-step instructions in the [IAM Provisioning Guide](iam/README.md)
+# to create the Fargate Task Role and Fargate Task Execution Role out-of-band.
 ```
 
 > ECR repository names are per-account/per-region — no uniqueness concern.
@@ -162,6 +168,8 @@ Or skip the manual build entirely and push to `main` — the GitHub Actions work
 
 ### Step 3 — Deploy the CDK stack
 
+Deploying the stack requires the pre-created Task Role ARN (strictly required) and Execution Role ARN (recommended).
+
 ```bash
 cd cdk
 python3 -m venv .venv && source .venv/bin/activate
@@ -170,9 +178,19 @@ pip install -r requirements.txt
 export CDK_DEFAULT_ACCOUNT=$AWS_ACCOUNT
 export CDK_DEFAULT_REGION=$AWS_REGION
 
+# Retrieve your pre-created role ARNs
+export TASK_ROLE_ARN=$(aws iam get-role --role-name MapserverFargateTaskRole --query "Role.Arn" --output text)
+export EXECUTION_ROLE_ARN=$(aws iam get-role --role-name MapserverFargateExecutionRole --query "Role.Arn" --output text)
+
 npx aws-cdk bootstrap     # one-time per account/region
-npx aws-cdk diff          # preview what will be created
-npx aws-cdk deploy
+
+npx aws-cdk diff \
+  -c task_role_arn=$TASK_ROLE_ARN \
+  -c execution_role_arn=$EXECUTION_ROLE_ARN
+
+npx aws-cdk deploy \
+  -c task_role_arn=$TASK_ROLE_ARN \
+  -c execution_role_arn=$EXECUTION_ROLE_ARN
 ```
 
 Deploy takes ~10 min (RDS provisioning is the long pole). The stack outputs include the ALB DNS name and the full WMS URL.
