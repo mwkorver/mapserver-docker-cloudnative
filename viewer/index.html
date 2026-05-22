@@ -71,8 +71,10 @@
 
     #layer-info {
       position: absolute;
-      top: 60px;
-      right: 10px;
+      /* left side, below the zoom control — keeps it clear of the
+         Perf panel, which slides in from the right. */
+      top: 115px;
+      left: 8px;
       z-index: 1000;
       background: white;
       border-radius: 6px;
