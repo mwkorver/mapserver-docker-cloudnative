@@ -146,14 +146,20 @@ def header(extent, srs_set):
     if DEBUG_LEVEL not in ("", "0"):
         lines.append(f'  CONFIG "MS_DEBUGLEVEL" "{DEBUG_LEVEL}"')
         lines.append('  CONFIG "CPL_DEBUG" "ON"')
+    # NOTE: GDAL_HTTP_MULTIPLEX / GDAL_HTTP_VERSION are intentionally NOT set.
+    # GDAL's /vsicurl/ talks to the loopback nginx range-cache
+    # (http://localhost:8001), which listens plaintext HTTP/1.1 — no `http2`
+    # flag, h2c upgrade is declined, verified with `curl --http2`.  Those two
+    # knobs would just negotiate back down to 1.1.  And on a loopback hop the
+    # HTTP/2 multiplexing win (amortising connection setup) is ~zero anyway.
+    # The latency-sensitive hop is signer→S3, governed by the signer's own
+    # HTTP client, not by anything here.
     lines += [
         '  CONFIG "AWS_NO_SIGN_REQUEST" "YES"',
         f'  CONFIG "GDAL_CACHEMAX" "{GDAL_CACHEMAX}"',
         f'  CONFIG "VSI_CACHE" "{VSI_CACHE}"',
         f'  CONFIG "VSI_CACHE_SIZE" "{VSI_CACHE_SIZE}"',
         '  CONFIG "GDAL_DISABLE_READDIR_ON_OPEN" "TRUE"',
-        '  CONFIG "GDAL_HTTP_MULTIPLEX" "YES"',
-        '  CONFIG "GDAL_HTTP_VERSION" "2"',
         '  CONFIG "GDAL_HTTP_MERGE_CONSECUTIVE_RANGES" "YES"',
         '  CONFIG "CPL_VSIL_CURL_ALLOWED_EXTENSIONS" ".tif,.tiff"',
     ]
