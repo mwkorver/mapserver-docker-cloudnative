@@ -19,8 +19,15 @@
 
     /* suppress OL's rotate control; keep the zoom control (added below) */
     .ol-rotate { display: none; }
-    /* nudge the zoom control down so it clears the centered top toolbar */
-    .ol-zoom { top: 60px; left: 8px; }
+    /* nudge the zoom control down so it clears the centered top toolbar,
+       and scale it 2x for easier clicking. transform-origin keeps it
+       anchored at its top-left corner as it grows. */
+    .ol-zoom {
+      top: 60px;
+      left: 8px;
+      transform: scale(2);
+      transform-origin: top left;
+    }
 
     #toolbar {
       position: absolute;
@@ -71,9 +78,9 @@
 
     #layer-info {
       position: absolute;
-      /* left side, below the zoom control — keeps it clear of the
-         Perf panel, which slides in from the right. */
-      top: 115px;
+      /* left side, below the 2x-scaled zoom control — keeps it clear
+         of the Perf panel, which slides in from the right. */
+      top: 165px;
       left: 8px;
       z-index: 1000;
       background: white;
