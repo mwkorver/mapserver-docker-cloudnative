@@ -10,7 +10,7 @@ root.
 | ----------------- | -------------------------------------------------- |
 | VPC + S3 endpoint | 2 AZ, public subnets only, free S3 gateway endpoint |
 | ECS cluster       | `mapserver` (Fargate)                              |
-| Task definition   | ARM64, 4 vCPU / 8 GB, image from ECR `:latest`     |
+| Task definition   | ARM64, 4 vCPU / 8 GB, image from ECR `:latest`. Uses imported pre-created IAM roles. |
 | Service           | 1 task baseline, autoscales 1→4 on 60% CPU         |
 | ALB               | HTTP:80, WMS GetCapabilities health check          |
 | RDS PostgreSQL    | Single instance, `mapserver` DB, PostGIS extension, schema initialized via a `DbInit` custom-resource Lambda. Scanner inserts COG indexes here on deploy; MapServer reads `cog_index` for raster TILEINDEX layers. |
@@ -19,14 +19,16 @@ root.
 | AWS Budgets       | **Opt-in.** Set `-c monthly_budget_usd=N -c budget_email=…` to create a monthly budget filtered to the stack's `Project=mapserver-docker-cloudnative` cost-allocation tag. |
 | Stack-wide tags   | `Project=mapserver-docker-cloudnative` on every resource for cost reporting and the budget filter. |
 
-The S3 config bucket and ECR repo are **referenced** (assumed to exist).
-Create them out-of-band — they're long-lived and shouldn't be tied to stack
-lifecycle. ECR is also written to by the GitHub Actions workflow. The task
-role gets `read-write` on `s3://<config-bucket>/config/*` for catalog
-persistence and `read-only` on `s3://<imagery-bucket>/imagery/*` for COG
-serving.
+The S3 config bucket, ECR repo, and IAM Fargate roles are **referenced** (assumed to exist).
+Create them out-of-band — they're long-lived and shouldn't be tied to the stack lifecycle, promoting a robust separation of concerns. ECR is also written to by the GitHub Actions workflow. Since S3 buckets and IAM roles are imported/immutable inside the stack, S3 permissions are pre-configured directly on the out-of-band Task role itself. The RDS database secret is created inside the stack, meaning it is mutable, so CDK automatically attaches a resource-based policy to it at deploy time to authorize the imported Task role.
 
 ## Prereqs
+
+### 1. Pre-create IAM Roles
+Before deploying, the Fargate Task and Execution roles must be created out-of-band so they persist in the account after stack deletion.
+Follow the instructions in the [IAM Provisioning Guide](../iam/README.md) to create them.
+
+### 2. Prepare Resources and Environment
 
 ```bash
 export AWS_ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
@@ -82,13 +84,25 @@ replacement does not lose collection metadata. Optional escape hatch:
 
 ## Deploy
 
+Deploying the stack requires the pre-created Task Role ARN (strictly required) and Execution Role ARN (recommended).
+
 ```bash
 export CDK_DEFAULT_ACCOUNT=$AWS_ACCOUNT
 export CDK_DEFAULT_REGION=$AWS_REGION
 
+# Retrieve your pre-created role ARNs
+export TASK_ROLE_ARN=$(aws iam get-role --role-name MapserverFargateTaskRole --query "Role.Arn" --output text)
+export EXECUTION_ROLE_ARN=$(aws iam get-role --role-name MapserverFargateExecutionRole --query "Role.Arn" --output text)
+
 cdk bootstrap                        # one-time per account/region
-cdk diff                             # preview
-cdk deploy
+
+cdk diff \
+  -c task_role_arn=$TASK_ROLE_ARN \
+  -c execution_role_arn=$EXECUTION_ROLE_ARN
+
+cdk deploy \
+  -c task_role_arn=$TASK_ROLE_ARN \
+  -c execution_role_arn=$EXECUTION_ROLE_ARN
 ```
 
 Output `WmsUrl` is your endpoint:
