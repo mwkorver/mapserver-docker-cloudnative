@@ -32,6 +32,16 @@ UNSIGNED_PAYLOAD = "UNSIGNED-PAYLOAD"
 METADATA_TIMEOUT = float(os.environ.get("AWS_METADATA_TIMEOUT", "1.0"))
 ENABLE_EC2_METADATA = os.environ.get("S3_SIGNER_EC2_METADATA", "false").lower() in {"1", "true", "yes"}
 
+# Buckets that must be accessed WITHOUT signing (public buckets in other
+# accounts whose bucket policies deny authenticated cross-account requests).
+# Comma-separated list; overridable via env.  njogis-imagery is included by
+# default because it is a public NJ state bucket that returns 403 for any
+# signed request originating from a different AWS account.
+_PUBLIC_BUCKETS_DEFAULT = "njogis-imagery"
+PUBLIC_BUCKETS: set[str] = set(
+    filter(None, os.environ.get("S3_PUBLIC_BUCKETS", _PUBLIC_BUCKETS_DEFAULT).split(","))
+)
+
 _CREDENTIALS = None
 _NO_CREDENTIALS_UNTIL = 0
 _CREDENTIALS_LOCK = threading.Lock()
@@ -175,10 +185,11 @@ def _canonical_uri(path):
     return "/" + "/".join(quote(segment, safe="-_.~") for segment in path.lstrip("/").split("/"))
 
 
-def signed_headers(method, path, query, range_header, extra_headers=None, bucket=None, region=None):
+def signed_headers(method, path, query, range_header, extra_headers=None, bucket=None, region=None, signing_mode=None):
     bucket = bucket or S3_BUCKET
     region = region or S3_REGION
-    creds = credentials()
+    effective_mode = signing_mode if signing_mode is not None else SIGNING_MODE
+    creds = None if effective_mode == "off" else credentials()
     host = f"{bucket}.s3.{region}.amazonaws.com"
     headers = {
         "host": host,
@@ -262,7 +273,15 @@ class S3ProxyHandler(BaseHTTPRequestHandler):
 
         range_header = self.headers.get("Range")
         extra = {"x-amz-request-payer": "requester"} if is_requester_pays else None
-        
+
+        # Public buckets in other accounts reject signed cross-account requests
+        # with 403 even though unsigned access works fine.  Force unsigned mode
+        # for any bucket in PUBLIC_BUCKETS so we never attach an Authorization
+        # header to those requests.
+        effective_signing = SIGNING_MODE
+        if target_bucket in PUBLIC_BUCKETS:
+            effective_signing = "off"
+
         headers = signed_headers(
             self.command,
             upstream_path,
@@ -271,6 +290,7 @@ class S3ProxyHandler(BaseHTTPRequestHandler):
             extra,
             bucket=target_bucket,
             region=target_region,
+            signing_mode=effective_signing,
         )
 
         connection = http.client.HTTPSConnection(
@@ -312,7 +332,8 @@ class S3ProxyHandler(BaseHTTPRequestHandler):
 def main():
     print(
         f"s3-sigv4-proxy: listening on {LISTEN_HOST}:{LISTEN_PORT}, "
-        f"bucket={S3_BUCKET}, region={S3_REGION}, signing={SIGNING_MODE}",
+        f"bucket={S3_BUCKET}, region={S3_REGION}, signing={SIGNING_MODE}, "
+        f"public_buckets(unsigned)={sorted(PUBLIC_BUCKETS) or 'none'}",
         flush=True,
     )
     ThreadingHTTPServer((LISTEN_HOST, LISTEN_PORT), S3ProxyHandler).serve_forever()
