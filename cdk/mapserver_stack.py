@@ -347,7 +347,7 @@ class MapserverStack(Stack):
         # range-aware cache lookup, then the local signer uses this task role
         # only on cache misses against private S3.
         config_bucket.grant_read_write(task_def.task_role, "config/*")
-        imagery_bucket.grant_read(task_def.task_role, "imagery/*")
+        imagery_bucket.grant_read(task_def.task_role, "*")
         db.secret.grant_read(task_def.task_role)
 
         container = task_def.add_container(
