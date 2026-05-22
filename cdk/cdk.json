@@ -5,6 +5,7 @@
     "exclude": ["README.md", "cdk*.json", "requirements*.txt", ".venv", "**/__pycache__"]
   },
   "context": {
+    "region": "us-west-2",
     "mapserver_cpu": 4096,
     "mapserver_memory_limit_mib": 8192,
     "mapserver_ephemeral_storage_gib": 21,
