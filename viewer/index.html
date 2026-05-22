@@ -421,21 +421,28 @@
         });
         labelsSource.addFeatures(labelFeats);
       }
-      updateLayerInfo(footprintCount);
+      updateLayerInfo();
       refreshViewerLinks();
     });
+
+    // OL layer minZoom is EXCLUSIVE ("visible above this zoom"), so to make
+    // imagery + its timing overlay visible at zoom >= IMAGERY_MIN_ZOOM the
+    // layer minZoom must be IMAGERY_MIN_ZOOM - 1.  Imagery is intentionally
+    // bounded this way: below IMAGERY_MIN_ZOOM a single WMS tile would
+    // mosaic hundreds of COGs — far too many byte-range reads per tile.
+    const WMS_LAYER_MIN_ZOOM = IMAGERY_MIN_ZOOM - 1;
 
     const timingSource = new ol.source.Vector();
     const timingLayer  = new ol.layer.Vector({
       source: timingSource,
       style: timingStyle,
-      minZoom: IMAGERY_MIN_ZOOM,
+      minZoom: WMS_LAYER_MIN_ZOOM,
       updateWhileAnimating: false,
       updateWhileInteracting: false,
     });
 
     // WMS layer — source is swapped by applyUrl(); created here with default URL
-    const wmsLayer = new ol.layer.Tile({ minZoom: IMAGERY_MIN_ZOOM });
+    const wmsLayer = new ol.layer.Tile({ minZoom: WMS_LAYER_MIN_ZOOM });
 
     /* ---- map ---- */
     // eslint-disable-next-line no-var
@@ -571,47 +578,48 @@
     }
 
     /* ---- layer info panel ---- */
-    function updateLayerInfo(returned, total) {
-      const zoom     = Math.round(map.getView().getZoom() || 0);
-      const showWms  = zoom >= IMAGERY_MIN_ZOOM;
-      let countStr   = '';
-      if (returned !== undefined) {
-        countStr = (total != null && total !== returned)
-          ? ' (' + returned + '/' + total + ')'
-          : ' (' + returned + ')';
-      }
+    function updateLayerInfo() {
+      const zoom    = Math.round(map.getView().getZoom() || 0);
+      const showWms = zoom >= IMAGERY_MIN_ZOOM;
+
       let html = '<div class="layer-row">'
         + '<span class="swatch" style="background:#e06020;opacity:0.6;border:1px solid #e06020"></span>'
-        + 'COG Footprints' + countStr
+        + 'COG Footprints (' + footprintCount + ')'
         + '</div>';
+
       if (showWms) {
         html += '<div class="layer-row">'
           + '<span class="swatch" style="background:#4a9eff"></span>'
           + 'WMS: ' + WMS_LAYER_NAMES.join(', ')
           + '</div>';
+        // Native-resolution status — only meaningful while imagery is shown.
+        // NATIVE_ZOOM is the Web-Mercator zoom where one screen pixel maps
+        // to ~one source COG pixel (scanner-derived, collection median).
+        var dz = zoom - NATIVE_ZOOM;
+        if (dz === 0) {
+          html += '<div class="layer-row" style="padding-left:18px;font-size:11px;'
+            + 'color:#1a7f37;font-weight:600">★ native resolution · z'
+            + NATIVE_ZOOM + ' · 1:1 pixels</div>';
+        } else {
+          var rel = dz > 0 ? '+' + dz + ' · upsampled' : dz + ' · downsampled';
+          html += '<div class="layer-row" style="padding-left:18px;font-size:11px;'
+            + 'color:#999">native z' + NATIVE_ZOOM + ' · ' + rel + '</div>';
+        }
       } else {
-        html += '<div class="layer-row" style="color:#aaa;padding-left:18px">zoom in for imagery</div>';
+        // Imagery is intentionally OFF when zoomed out: one WMS tile at this
+        // scale would mosaic hundreds of COGs — too many byte-range reads.
+        // Make the off-state explicit instead of letting imagery silently
+        // vanish, and say plainly how to bring it back.
+        html += '<div class="layer-row" style="color:#aaa" '
+          + 'title="Imagery is disabled when zoomed out — one WMS tile here '
+          + 'would mosaic hundreds of COGs. Zoom in to z' + IMAGERY_MIN_ZOOM + '.">'
+          + '<span class="swatch" style="background:#4a9eff;opacity:0.25"></span>'
+          + 'WMS: off</div>';
+        html += '<div class="layer-row" style="padding-left:18px;font-size:11px;'
+          + 'color:#999">zoom in to z' + IMAGERY_MIN_ZOOM + ' for imagery</div>';
       }
-      html += '<div class="layer-row" style="color:#888;padding-left:18px;font-size:11px">zoom: ' + zoom + '</div>';
 
-      // Native-resolution indicator.  NATIVE_ZOOM is the median Web-Mercator
-      // zoom level at which one screen pixel maps to ~one source COG pixel —
-      // the scanner derives it per COG from ground sample distance and takes
-      // the collection median.  At that zoom the imagery is shown 1:1; above
-      // it the imagery is upsampled (no extra real detail); below it the
-      // imagery is downsampled.
-      var dz = zoom - NATIVE_ZOOM;
-      if (dz === 0) {
-        html += '<div class="layer-row" style="padding-left:18px;font-size:11px;'
-          + 'color:#1a7f37;font-weight:600">★ native resolution · z'
-          + NATIVE_ZOOM + ' · 1:1 pixels</div>';
-      } else {
-        var rel = dz > 0
-          ? '+' + dz + ' · upsampled'
-          : dz + ' · downsampled';
-        html += '<div class="layer-row" style="padding-left:18px;font-size:11px;'
-          + 'color:#999">native z' + NATIVE_ZOOM + ' · ' + rel + '</div>';
-      }
+      html += '<div class="layer-row" style="color:#888;padding-left:18px;font-size:11px">zoom: ' + zoom + '</div>';
       document.getElementById('layer-info').innerHTML = html;
     }
 
