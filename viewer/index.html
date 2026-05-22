@@ -271,6 +271,11 @@
     /* ---- constants derived from viewer config ---- */
     const IMAGERY_MIN_ZOOM  = VIEWER_CONFIG.imageryMinZoom || 18;
     const IMAGERY_MAX_ZOOM  = VIEWER_CONFIG.imageryMaxZoom || Math.max(22, IMAGERY_MIN_ZOOM + 1);
+    // NATIVE_ZOOM: the Web-Mercator zoom level where one screen pixel maps
+    // to ~one source COG pixel (1:1).  The scanner computes this per COG
+    // from ground sample distance and stores the collection median in
+    // collections.json → viewer config.  Surfaced in the layer panel so a
+    // user can tell when they're viewing imagery at true native detail.
     const NATIVE_ZOOM       = VIEWER_CONFIG.nativeZoom || (IMAGERY_MIN_ZOOM + 4);
     const COG_LABEL_MIN_ZOOM = 15;
     // collectionId drives the WFS layer name: cog-extents-{collectionId}
@@ -588,6 +593,25 @@
         html += '<div class="layer-row" style="color:#aaa;padding-left:18px">zoom in for imagery</div>';
       }
       html += '<div class="layer-row" style="color:#888;padding-left:18px;font-size:11px">zoom: ' + zoom + '</div>';
+
+      // Native-resolution indicator.  NATIVE_ZOOM is the median Web-Mercator
+      // zoom level at which one screen pixel maps to ~one source COG pixel —
+      // the scanner derives it per COG from ground sample distance and takes
+      // the collection median.  At that zoom the imagery is shown 1:1; above
+      // it the imagery is upsampled (no extra real detail); below it the
+      // imagery is downsampled.
+      var dz = zoom - NATIVE_ZOOM;
+      if (dz === 0) {
+        html += '<div class="layer-row" style="padding-left:18px;font-size:11px;'
+          + 'color:#1a7f37;font-weight:600">★ native resolution · z'
+          + NATIVE_ZOOM + ' · 1:1 pixels</div>';
+      } else {
+        var rel = dz > 0
+          ? '+' + dz + ' · upsampled'
+          : dz + ' · downsampled';
+        html += '<div class="layer-row" style="padding-left:18px;font-size:11px;'
+          + 'color:#999">native z' + NATIVE_ZOOM + ' · ' + rel + '</div>';
+      }
       document.getElementById('layer-info').innerHTML = html;
     }
 
