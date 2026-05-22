@@ -763,6 +763,21 @@ done</pre>
             </div>
           </div>
           <div class="inline-form">
+            <label for="nginx-slice-mode">Slice mode <span style="font-weight: normal; color: var(--muted); font-size: 11px;">(experimental, disabled)</span></label>
+            <div>
+              <select id="nginx-slice-mode" disabled>
+                <option value="off">Off (range-keyed cache)</option>
+                <option value="1m">On — 1 MB slices</option>
+                <option value="4m">On — 4 MB slices (larger COG blocks)</option>
+              </select>
+              <div style="font-size: 12px; color: var(--muted); margin-top: 4px;">
+                Aligned byte-range coalescing via ngx_http_slice_module.
+                Not yet wired through — current implementation hangs under
+                MapServer's parallel HTTP/2 reads.  Toggle has no effect.
+              </div>
+            </div>
+          </div>
+          <div class="inline-form">
             <label>Apply cache config</label>
             <div>
               <button id="cache-config-save" disabled>Apply</button>
@@ -989,7 +1004,8 @@ done</pre>
       const cacheDirty =
         cacheMaxSizeGb() !== loadedCacheMaxSizeGb() ||
         getRadioValue("nginx-cache-ttl") !== latestConfig.nginxCacheTtl ||
-        getRadioValue("nginx-cache-404-ttl") !== latestConfig.nginxCache404Ttl;
+        getRadioValue("nginx-cache-404-ttl") !== latestConfig.nginxCache404Ttl ||
+        document.getElementById("nginx-slice-mode").value !== (latestConfig.nginxSliceMode ?? "off");
 
       setDirtyButton("numprocs-save", numprocsDirty);
       setDirtyButton("runtime-save", runtimeDirty);
@@ -1117,6 +1133,11 @@ done</pre>
         document.getElementById("nginx-cache-max-size-input").disabled = !config.writeEnabled;
         setRadioDisabled("nginx-cache-ttl", !config.writeEnabled);
         setRadioDisabled("nginx-cache-404-ttl", !config.writeEnabled);
+        document.getElementById("nginx-slice-mode").value = config.nginxSliceMode ?? "off";
+        // Hard-disable until the nginx slice integration is fixed — see
+        // admin_api.py NGINX_SLICE_MODES comment.  Picker is visible as
+        // scaffolding so the eventual fix is a single-line UI change.
+        document.getElementById("nginx-slice-mode").disabled = true;
         document.getElementById("nginx-workers").textContent = config.nginxWorkers ?? "—";
         document.getElementById("nginx-cache-api-link").href = nginxCacheUrl;
         const staticCache = config.staticNginxCacheSettings || {};
@@ -1593,6 +1614,7 @@ done</pre>
         nginxCacheMaxSizeGb: Number.parseInt(document.getElementById("nginx-cache-max-size-input").value, 10),
         nginxCacheTtl: getRadioValue("nginx-cache-ttl"),
         nginxCache404Ttl: getRadioValue("nginx-cache-404-ttl"),
+        nginxSliceMode: document.getElementById("nginx-slice-mode").value,
       };
     }
 
@@ -1808,6 +1830,7 @@ done</pre>
       "vsi-cache-input",
       "mapserver-debug-input",
       "nginx-cache-max-size-input",
+      "nginx-slice-mode",
     ].forEach((id) => {
       document.getElementById(id).addEventListener("input", refreshDirtyState);
       document.getElementById(id).addEventListener("change", refreshDirtyState);
