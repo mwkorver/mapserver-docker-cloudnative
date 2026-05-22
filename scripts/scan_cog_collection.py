@@ -25,6 +25,14 @@ from pathlib import Path
 
 from osgeo import gdal, osr
 
+# Mark all /vsicurl/ traffic from this script with X-Scanner so the
+# in-container nginx range-cache (mapserver_proxy.conf) skips both
+# reading from and writing to its cache for our requests.  Scanning has
+# no spatial/temporal locality — one header read per file, then move on
+# — and would otherwise blow the serving cache out of its LRU window.
+# SigV4 signing via the local signer still applies.
+os.environ.setdefault("GDAL_HTTP_HEADERS", "X-Scanner: 1")
+
 try:
     import psycopg2
     from psycopg2.extras import execute_values

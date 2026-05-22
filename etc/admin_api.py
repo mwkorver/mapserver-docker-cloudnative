@@ -29,6 +29,12 @@ MAPFILE_GENERATOR = Path("/etc/mapfile_generator.py")
 NGINX_CONF = Path("/etc/nginx/sites-available/mapserver_proxy.conf")
 NGINX_CACHE_CONF = Path("/etc/nginx/conf.d/cog_cache.conf")
 NGINX_CACHE = Path("/var/cache/nginx/cog")
+# Slice-mode toggle: currently a no-op (the nginx slice module breaks
+# MapServer's parallel HTTP/2 byte-range reads).  The field is accepted
+# and persisted so the admin UI can keep its picker visible; flipping
+# it has no effect on the live cache until the upstream behavior is
+# fixed.  See README "What's new here" → caching notes.
+NGINX_SLICE_MODES = ("off", "1m", "4m")
 MAX_WORKERS = int(os.environ.get("MAPSERVER_MAX_NUMPROCS", "32"))
 DEFAULT_RUNTIME = {
     "activeCollection": "",
@@ -43,6 +49,12 @@ DEFAULT_RUNTIME = {
     "nginxCacheMaxSize": "20g",
     "nginxCacheTtl": "24h",
     "nginxCache404Ttl": "1m",
+    # Slice-mode field — accepted and persisted, currently no-op.  Enabling
+    # nginx slice in front of the SigV4 signer broke MapServer's parallel
+    # HTTP/2 byte-range reads (sub-requests hung).  The admin UI keeps the
+    # picker visible (disabled) as scaffolding for a future fix.  Always
+    # validate to one of NGINX_SLICE_MODES so storage stays consistent.
+    "nginxSliceMode": "off",
 }
 STATIC_NGINX_CACHE_SETTINGS = {
     "cacheKey": "$request_method:$request_uri:$http_range",
@@ -345,6 +357,9 @@ def validate_runtime(config):
     result["nginxCacheMaxSize"] = validate_nginx_size(result["nginxCacheMaxSize"], "nginxCacheMaxSize")
     result["nginxCacheTtl"] = validate_nginx_ttl(result["nginxCacheTtl"], "nginxCacheTtl")
     result["nginxCache404Ttl"] = validate_nginx_ttl(result["nginxCache404Ttl"], "nginxCache404Ttl")
+    result["nginxSliceMode"] = str(result.get("nginxSliceMode") or "off").strip().lower()
+    if result["nginxSliceMode"] not in NGINX_SLICE_MODES:
+        raise ValueError(f"nginxSliceMode must be one of: {', '.join(NGINX_SLICE_MODES)}")
     if result["gdalCacheMaxMb"] < 0 or result["gdalCacheMaxMb"] > 65536:
         raise ValueError("gdalCacheMaxMb must be between 0 and 65536")
     if result["vsiCacheSizeMb"] < 0 or result["vsiCacheSizeMb"] > 65536:
