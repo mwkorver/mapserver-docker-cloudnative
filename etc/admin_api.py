@@ -581,13 +581,26 @@ def collections_config():
     return {"activeCollection": active_id, "collections": ui_collections}
 
 
+def deployment_mode():
+    """'aws' when running as an ECS/Fargate task, else 'local'.
+
+    Cheap — pure env-var presence check, no metadata HTTP call.  ECS
+    injects ECS_CONTAINER_METADATA_URI_V4 into every task; the CDK stack
+    also passes DB_SECRET_ARN.  The viewer uses this to label the perf
+    panel's network hop (ALB on AWS vs the local nginx container).
+    """
+    if os.environ.get("ECS_CONTAINER_METADATA_URI_V4") or os.environ.get("DB_SECRET_ARN"):
+        return "aws"
+    return "local"
+
+
 def viewer_config():
     """Viewer shape: the active collection's bounds/center/layer name."""
     doc = _read_collections()
     active = _active_collection(doc.get("collections", []))
-    if active is None:
-        return dict(FALLBACK_VIEWER_CONFIG)
-    return _collection_to_viewer(active)
+    config = dict(FALLBACK_VIEWER_CONFIG) if active is None else _collection_to_viewer(active)
+    config["deployment"] = deployment_mode()
+    return config
 
 
 def set_active_collection(collection_id):

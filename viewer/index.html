@@ -238,7 +238,7 @@
         <div id="server-stats" class="empty">click Refresh</div>
       </div>
       <div class="perf-section">
-        <h4>Client-side (Browser → ALB → Browser)</h4>
+        <h4 id="client-stats-heading">Client-side (browser round-trip)</h4>
         <div id="client-stats" class="empty">pan/zoom to collect samples</div>
       </div>
       <div class="perf-section">
@@ -712,6 +712,15 @@
       client: document.getElementById('client-stats'),
       recent: document.getElementById('recent-requests'),
     };
+
+    // Label the client-side network hop for the actual deployment:
+    // the ALB on AWS, the local nginx container otherwise.  The hop is
+    // what the browser-observed round-trip time is measured across.
+    (function labelClientHop() {
+      var hop = (VIEWER_CONFIG.deployment === 'aws') ? 'ALB' : 'nginx';
+      document.getElementById('client-stats-heading').textContent =
+        'Client-side (Browser → ' + hop + ' → Browser)';
+    })();
 
     document.getElementById('perf-toggle').addEventListener('click', function () {
       panel.classList.toggle('open');
