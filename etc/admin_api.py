@@ -784,18 +784,16 @@ def sync_collections_catalog():
     uri = os.environ.get("COLLECTIONS_S3_URI")
     if not uri:
         return {"enabled": False}
-    result = subprocess.run(
-        ["aws", "s3", "cp", str(COLLECTIONS_FILE), uri],
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(
-            "collections catalog S3 sync failed: "
-            + (result.stderr or result.stdout or f"aws exited {result.returncode}")
-        )
-    return {"enabled": True, "uri": uri, "output": (result.stdout or result.stderr).strip()}
+
+    import boto3
+    try:
+        without_scheme = uri.removeprefix("s3://")
+        bucket, _, key = without_scheme.partition("/")
+        boto3.client("s3").upload_file(str(COLLECTIONS_FILE), bucket, key)
+    except Exception as exc:
+        raise RuntimeError(f"collections catalog S3 sync failed: {exc}")
+
+    return {"enabled": True, "uri": uri, "output": f"Successfully uploaded collections.json to {uri}"}
 
 
 def _validate_scan_payload(payload):
