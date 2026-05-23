@@ -453,7 +453,15 @@ def upsert_collection(path, entry):
                   file=sys.stderr)
         collections = doc.get("collections", [])
     else:
-        doc = {"version": COLLECTIONS_SCHEMA_VERSION, "collections": []}
+        doc = {
+            "type": "Catalog",
+            "stac_version": "1.0.0",
+            "id": "mapserver-catalog",
+            "title": "Cloud-Native MapServer Catalog",
+            "description": "Catalog of COG collections served by MapServer",
+            "version": COLLECTIONS_SCHEMA_VERSION,
+            "collections": []
+        }
         collections = doc["collections"]
 
     target_id = entry["id"]
@@ -760,8 +768,38 @@ def main():
         collection_min_zoom = args.min_zoom if args.min_zoom is not None else collection_native_zoom - 4
         collection_max_zoom = args.max_zoom if args.max_zoom is not None else collection_native_zoom + 1
 
+        indexed_time = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
         entry = {
+            # --- STAC Collection Core Fields ---
+            "type": "Collection",
+            "stac_version": "1.0.0",
             "id": args.collection,
+            "title": label,
+            "description": f"COG collection '{args.collection}' scanned from S3",
+            "license": "various",
+            "extent": {
+                "spatial": {
+                    "bbox": [bbox_4326] if bbox_4326 else []
+                },
+                "temporal": {
+                    "interval": [[indexed_time, indexed_time]]
+                }
+            },
+            "links": [
+                {
+                    "rel": "self",
+                    "href": f"./{args.collection}.json",
+                    "type": "application/json"
+                }
+            ],
+            "providers": [
+                {
+                    "name": args.attribution or "Unknown",
+                    "roles": ["producer", "host"]
+                }
+            ] if args.attribution else [],
+
+            # --- MapServer / Custom Pipeline Compatibility Fields ---
             "layer_name": layer_name,
             "layer_names": [item["layer_name"] for item in tileindexes],
             "map_name": map_name,
@@ -789,7 +827,7 @@ def main():
             "tileindex_layer_name": tileindexes[0]["tileindex_layer_name"],
             "tileindexes": tileindexes,
             "postgis": postgis_loaded,
-            "indexed_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+            "indexed_at": indexed_time,
         }
         upsert_collection(args.collections_file, entry)
 
