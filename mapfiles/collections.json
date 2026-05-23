@@ -1,8 +1,51 @@
 {
+  "type": "Catalog",
+  "stac_version": "1.0.0",
+  "id": "mapserver-catalog",
+  "title": "Cloud-Native MapServer Catalog",
+  "description": "Catalog of COG collections served by MapServer",
   "version": 1,
   "collections": [
     {
+      "type": "Collection",
+      "stac_version": "1.0.0",
       "id": "nj-2020-1ft",
+      "title": "New Jersey 2020 1-foot Imagery",
+      "description": "New Jersey 2020 1-foot Imagery scanned from S3",
+      "license": "various",
+      "extent": {
+        "spatial": {
+          "bbox": [
+            [
+              -75.5594,
+              38.8718,
+              -73.8868,
+              41.3577
+            ]
+          ]
+        },
+        "temporal": {
+          "interval": [
+            [
+              "2026-05-12T00:00:00Z",
+              "2026-05-12T00:00:00Z"
+            ]
+          ]
+        }
+      },
+      "links": [
+        {
+          "rel": "self",
+          "href": "./nj-2020-1ft.json",
+          "type": "application/json"
+        }
+      ],
+      "providers": [
+        {
+          "name": "NJ Office of GIS / NJGIN",
+          "roles": ["producer", "host"]
+        }
+      ],
       "layer_name": "nj-2020",
       "map_name": "nj-imagery",
       "label": "New Jersey 2020 1-foot Imagery",
