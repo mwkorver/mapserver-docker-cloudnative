@@ -1,8 +1,8 @@
 # CDK — mapserver infrastructure
 
-Provisions the AWS resources to run the mapserver container on Fargate behind
-an ALB. Pairs with the Dockerfile and GitHub Actions workflow at the repo
-root.
+Provisions the AWS resources to run the shared MapServer/GDAL container on
+Fargate behind an ALB. The deployment selects either PostGIS or GeoParquet as
+its spatial-index backend.
 
 ## What it creates
 
@@ -13,7 +13,7 @@ root.
 | Task definition   | ARM64, 4 vCPU / 8 GB, image from ECR `:latest`. Uses imported pre-created IAM roles. |
 | Service           | 1 task baseline, autoscales 1→4 on 60% CPU         |
 | ALB               | HTTP:80, WMS GetCapabilities health check          |
-| RDS PostgreSQL    | Single instance, `mapserver` DB, PostGIS extension, schema initialized via a `DbInit` custom-resource Lambda. Scanner inserts COG indexes here on deploy; MapServer reads `cog_index` for raster TILEINDEX layers. |
+| RDS PostgreSQL    | Created only for `db_backend=postgis`. PostGIS schema is initialized by the `DbInit` custom resource. |
 | Log group         | `/ecs/mapserver`, 30-day retention                 |
 | Perf API          | Small Lambda + Function URL that surfaces recent WMS GetMap stats from CloudWatch Logs Insights for the viewer's in-page performance panel. |
 | AWS Budgets       | **Opt-in.** Set `-c monthly_budget_usd=N -c budget_email=…` to create a monthly budget filtered to the stack's `Project=mapserver-docker-cloudnative` cost-allocation tag. |
@@ -101,9 +101,65 @@ cdk diff \
   -c execution_role_arn=$EXECUTION_ROLE_ARN
 
 cdk deploy \
+  -c db_backend=postgis \
   -c task_role_arn=$TASK_ROLE_ARN \
   -c execution_role_arn=$EXECUTION_ROLE_ARN
 ```
+
+### GeoParquet backend
+
+GeoParquet mode creates no RDS instance or database secret. Provide the active
+state/year combinations as CDK context:
+
+```bash
+cdk deploy \
+  -c db_backend=parquet \
+  -c task_role_arn=$TASK_ROLE_ARN \
+  -c execution_role_arn=$EXECUTION_ROLE_ARN \
+  -c 'parquet_selections={"al":2023,"ct":2021,"tx":2020}'
+```
+
+At startup the task downloads only those indexes, rewrites them locally with
+MapServer-compatible `location` and `tile_srs` fields, and generates the
+mapfile. The admin collection mutation APIs are disabled in this mode.
+The shared runtime image contains a direct-only GDAL Parquet plugin and its
+pinned Arrow runtime libraries; it does not include DuckDB or the GDAL full
+image.
+
+Optional custom location:
+
+```bash
+cdk deploy \
+  -c db_backend=parquet \
+  -c 'parquet_selections={"tx":2020}' \
+  -c 'parquet_index_uri_template=s3://bucket/path/state={state}/year={year}/data.parquet' \
+  -c task_role_arn=$TASK_ROLE_ARN
+```
+
+### Mutable GeoParquet selections
+
+Use an S3 JSON object as the live selection pointer:
+
+```bash
+cdk deploy \
+  -c db_backend=parquet \
+  -c parquet_selections_s3_uri=s3://my-config/config/parquet-selections.json \
+  -c task_role_arn=$TASK_ROLE_ARN
+```
+
+The object contains either `{"tx":2020,"ct":2021}` or the explicit selection
+array documented above. Replace the object, then send:
+
+```bash
+curl -X POST "$MAPSERVER_URL/admin/api/parquet-refresh"
+curl "$MAPSERVER_URL/admin/api/parquet-refresh"
+```
+
+Refresh runs asynchronously and switches to the new immutable generation only
+after every Parquet index and the candidate mapfile are ready. Ensure the task
+role can read the pointer and all referenced index objects. Protect the admin
+mutation endpoint with your ALB/WAF/authentication layer; the container does
+not currently authenticate admin API calls itself.
 
 Output `WmsUrl` is your endpoint:
 ```

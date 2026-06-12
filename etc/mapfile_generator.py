@@ -10,7 +10,8 @@ For each enabled collection in collections.json this emits three LAYER blocks:
 
 Backend selection per collection:
   * DB_HOST + DB_USER set AND collection.postgis = true → POSTGIS connection
-  * otherwise → OGR connection against the bundled GeoJSON files
+  * collection.parquet = true → OGR connection against staged GeoParquet
+  * otherwise → OGR connection against bundled FlatGeobuf/GeoJSON files
 
 Driven entirely by env + collections.json; no hand-edited mapfile needed.
 """
@@ -78,6 +79,11 @@ def ogr_layer_name(path):
         except (OSError, json.JSONDecodeError):
             return Path(path).stem
     return Path(path).stem
+
+
+def ogr_connection(path, parquet=False):
+    """Return an explicit GDAL dataset name for plugin-backed formats."""
+    return f"PARQUET:{path}" if parquet else path
 
 
 def union_extent(collections, key, fallback):
@@ -161,7 +167,7 @@ def header(extent, srs_set):
         f'  CONFIG "VSI_CACHE_SIZE" "{VSI_CACHE_SIZE}"',
         '  CONFIG "GDAL_DISABLE_READDIR_ON_OPEN" "TRUE"',
         '  CONFIG "GDAL_HTTP_MERGE_CONSECUTIVE_RANGES" "YES"',
-        '  CONFIG "CPL_VSIL_CURL_ALLOWED_EXTENSIONS" ".tif,.tiff"',
+        '  CONFIG "CPL_VSIL_CURL_ALLOWED_EXTENSIONS" ".tif,.tiff,.parquet"',
     ]
     return lines
 
@@ -191,7 +197,7 @@ def footprints_layer(c, db_conn):
         extent = c.get("extent_native") or c.get("extent_3857") or DEFAULT_EXTENT_3857
         conn_block = [
             '    CONNECTIONTYPE OGR',
-            f'    CONNECTION "{tileindex}"',
+            f'    CONNECTION "{ogr_connection(tileindex, c.get("parquet", False))}"',
             f'    DATA "{layer_name}"',
         ]
         proj_epsg = c.get("native_epsg", 3857)
@@ -270,7 +276,7 @@ def tileindex_layer_for_group(c, db_conn, group):
         layer_name = group.get("tileindex_layer_name") or c.get("tileindex_layer_name") or ogr_layer_name(tileindex)
         conn_block = [
             '    CONNECTIONTYPE OGR',
-            f'    CONNECTION "{tileindex}"',
+            f'    CONNECTION "{ogr_connection(tileindex, c.get("parquet", False))}"',
             f'    DATA "{layer_name}"',
         ]
     return [
@@ -295,17 +301,23 @@ def raster_layer_for_group(c, group):
     ]
     processing_lines = [f'    PROCESSING "{item}"' for item in processing]
     layer_name = group.get("layer_name") or c.get("layer_name") or c["id"]
-    return [
+    lines = [
         '',
         '  LAYER',
         f'    NAME "{layer_name}"',
         '    TYPE RASTER',
         '    STATUS ON',
         f'    TILEINDEX "{tileindex_map_layer_name(c, group)}"',
-        '    TILEITEM "location"',
+        f'    TILEITEM "{group.get("tileitem", "location")}"',
+    ]
+    if c.get("group"):
+        lines.append(f'    GROUP "{c["group"]}"')
+    if group.get("tilesrs"):
+        lines.append(f'    TILESRS "{group["tilesrs"]}"')
+    lines += [
         *processing_lines,
         '    PROJECTION',
-        f'      "init=epsg:{group["epsg"]}"',
+        '      AUTO' if group.get("mixed_srs") else f'      "init=epsg:{group["epsg"]}"',
         '    END',
         '    METADATA',
         f'      "ows_title"       "{c["label"]}"',
@@ -313,6 +325,7 @@ def raster_layer_for_group(c, group):
         '    END',
         '  END',
     ]
+    return lines
 
 
 def main():
@@ -324,7 +337,7 @@ def main():
     enabled.sort(key=lambda c: c.get("draw_order", 10))
 
     db_conn = db_connection_string()
-    backend = "postgis+ogr" if db_conn else "ogr-only"
+    backend = os.environ.get("DB_BACKEND") or ("postgis" if db_conn else "ogr")
 
     extent = union_extent(enabled, "extent_3857", DEFAULT_EXTENT_3857)
     native_srs = {group["epsg"] for c in enabled for group in tileindex_groups(c)}

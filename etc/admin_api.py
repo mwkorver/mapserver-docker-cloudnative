@@ -26,6 +26,8 @@ COLLECTIONS_FILE = Path("/usr/src/mapfiles/collections.json")
 MAPFILES_DIR = Path("/usr/src/mapfiles")
 SCAN_SCRIPT = Path("/usr/src/scripts/scan_cog_collection.py")
 MAPFILE_GENERATOR = Path("/etc/mapfile_generator.py")
+PARQUET_REFRESH = Path("/etc/parquet_refresh.py")
+PARQUET_REFRESH_STATUS = Path("/usr/src/mapfiles/parquet-refresh.json")
 NGINX_CONF = Path("/etc/nginx/sites-available/mapserver_proxy.conf")
 NGINX_CACHE_CONF = Path("/etc/nginx/conf.d/cog_cache.conf")
 NGINX_CACHE = Path("/var/cache/nginx/cog")
@@ -125,6 +127,8 @@ def _collection_status(collection):
         parts.append(f"indexed {rel}" if rel else f"indexed {indexed_at}")
     if collection.get("postgis"):
         parts.append("postgis")
+    elif collection.get("parquet"):
+        parts.append("geoparquet")
     return " · ".join(parts) if parts else "configured"
 
 
@@ -243,6 +247,21 @@ def write_enabled():
     return os.environ.get("ADMIN_WRITE_ENABLED", "false").lower() in ("1", "true", "yes")
 
 
+def collection_write_enabled():
+    value = os.environ.get("ADMIN_COLLECTION_WRITE_ENABLED")
+    if value is None:
+        return write_enabled()
+    return value.lower() in ("1", "true", "yes")
+
+
+def parquet_refresh_enabled():
+    return (
+        os.environ.get("DB_BACKEND") == "parquet"
+        and bool(os.environ.get("PARQUET_SELECTION_S3_URI"))
+        and write_enabled()
+    )
+
+
 def current_numprocs():
     conf = SUPERVISOR_CONF.read_text()
     match = re.search(r"^numprocs=(\d+)$", conf, re.MULTILINE)
@@ -284,6 +303,7 @@ def active_backend_summary():
             "indexSource": "",
         }
     db_enabled = bool(db_connection_string()) and bool(active.get("postgis", False))
+    parquet_enabled = bool(active.get("parquet", False))
     tileindexes = active.get("tileindexes") or []
     index_source = "cog_index" if db_enabled else (
         ", ".join(Path(item.get("tileindex", "")).name for item in tileindexes if item.get("tileindex"))
@@ -291,7 +311,7 @@ def active_backend_summary():
     )
     return {
         "activeCollection": active.get("id", ""),
-        "backend": "PostGIS" if db_enabled else "FlatGeobuf",
+        "backend": "PostGIS" if db_enabled else ("GeoParquet" if parquet_enabled else "FlatGeobuf"),
         "cogCount": active.get("cog_count", 0),
         "nativeEpsgs": active.get("native_epsgs") or ([active.get("native_epsg")] if active.get("native_epsg") else []),
         "indexSource": index_source,
@@ -317,6 +337,7 @@ def environment_info():
     fargate_memory = os.environ.get("FARGATE_MEMORY", "8192")
     return {
         "mode": "AWS Fargate" if metadata or os.environ.get("DB_SECRET_ARN") else "local Docker",
+        "dbBackend": os.environ.get("DB_BACKEND", "postgis" if os.environ.get("DB_SECRET_ARN") else "local"),
         "awsRegion": os.environ.get("AWS_REGION", os.environ.get("AWS_DEFAULT_REGION", "us-west-2")),
         "publicHost": os.environ.get("PUBLIC_HOST", "localhost"),
         "s3Signing": os.environ.get("S3_SIGNING", "auto"),
@@ -516,6 +537,9 @@ def admin_config():
         "indexBackend": environment["indexBackend"],
         "maxMapserverNumprocs": MAX_WORKERS,
         "writeEnabled": write_enabled(),
+        "collectionWriteEnabled": collection_write_enabled(),
+        "parquetRefreshEnabled": parquet_refresh_enabled(),
+        "parquetSelectionS3Uri": os.environ.get("PARQUET_SELECTION_S3_URI", ""),
         "fargateCpu": environment["fargateCpu"],
         "fargateMemory": environment["fargateMemory"],
         "s3Signing": environment["s3Signing"],
@@ -525,6 +549,67 @@ def admin_config():
     }
     ADMIN_CONFIG.write_text(json.dumps(config, indent=2) + "\n")
     return config
+
+
+def parquet_refresh_status():
+    try:
+        status = json.loads(PARQUET_REFRESH_STATUS.read_text())
+    except (OSError, json.JSONDecodeError):
+        status = {"status": "not-run"}
+    return {
+        "enabled": parquet_refresh_enabled(),
+        "selectionS3Uri": os.environ.get("PARQUET_SELECTION_S3_URI", ""),
+        **status,
+    }
+
+
+_PARQUET_REFRESH_THREAD = None
+_PARQUET_REFRESH_THREAD_LOCK = threading.Lock()
+
+
+def _run_parquet_refresh():
+    result = subprocess.run(
+        ["python3", str(PARQUET_REFRESH), "refresh"],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    output = result.stdout.strip() or result.stderr.strip()
+    print(
+        f"admin-api: GeoParquet refresh exited {result.returncode}: {output}",
+        flush=True,
+    )
+
+
+def start_parquet_refresh():
+    global _PARQUET_REFRESH_THREAD
+    if os.environ.get("DB_BACKEND") != "parquet":
+        raise ValueError("GeoParquet refresh is only available with DB_BACKEND=parquet")
+    if not os.environ.get("PARQUET_SELECTION_S3_URI"):
+        raise ValueError("PARQUET_SELECTION_S3_URI is not configured")
+    with _PARQUET_REFRESH_THREAD_LOCK:
+        if _PARQUET_REFRESH_THREAD and _PARQUET_REFRESH_THREAD.is_alive():
+            raise ValueError("a GeoParquet refresh is already running")
+        PARQUET_REFRESH_STATUS.write_text(
+            json.dumps(
+                {
+                    "status": "refreshing",
+                    "selectionSource": {
+                        "type": "s3",
+                        "uri": os.environ["PARQUET_SELECTION_S3_URI"],
+                    },
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        _PARQUET_REFRESH_THREAD = threading.Thread(
+            target=_run_parquet_refresh,
+            name="parquet-refresh",
+            daemon=True,
+        )
+        _PARQUET_REFRESH_THREAD.start()
+    return parquet_refresh_status()
 
 
 def _collection_by_id(collections, collection_id):
@@ -987,6 +1072,12 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 write_error(self, 500, str(exc))
             return
+        if path == "/parquet-refresh":
+            try:
+                write_json(self, 200, parquet_refresh_status())
+            except Exception as exc:
+                write_error(self, 500, str(exc))
+            return
         if path == "/jobs":
             write_json(self, 200, list_jobs())
             return
@@ -1016,14 +1107,25 @@ class Handler(BaseHTTPRequestHandler):
                 write_error(self, 500, str(exc))
             return
         if self.path == "/collections/scan":
-            if not write_enabled():
-                write_error(self, 403, "admin writes are disabled")
+            if not collection_write_enabled():
+                write_error(self, 403, "collection writes are disabled")
                 return
             try:
                 length = int(self.headers.get("Content-Length", "0"))
                 payload = json.loads(self.rfile.read(length) or b"{}")
                 result = start_scan(payload)
                 write_json(self, 202, result)
+            except ValueError as exc:
+                write_error(self, 400, str(exc))
+            except Exception as exc:
+                write_error(self, 500, str(exc))
+            return
+        if self.path == "/parquet-refresh":
+            if not write_enabled():
+                write_error(self, 403, "admin writes are disabled")
+                return
+            try:
+                write_json(self, 202, start_parquet_refresh())
             except ValueError as exc:
                 write_error(self, 400, str(exc))
             except Exception as exc:
@@ -1067,8 +1169,8 @@ class Handler(BaseHTTPRequestHandler):
             write_error(self, 500, str(exc))
 
     def delete_collection(self, collection_id):
-        if not write_enabled():
-            write_error(self, 403, "admin writes are disabled")
+        if not collection_write_enabled():
+            write_error(self, 403, "collection writes are disabled")
             return
         try:
             docs = _read_collections()
@@ -1137,8 +1239,8 @@ class Handler(BaseHTTPRequestHandler):
             write_error(self, 500, str(exc))
 
     def update_collection_enabled(self, collection_id):
-        if not write_enabled():
-            write_error(self, 403, "admin writes are disabled")
+        if not collection_write_enabled():
+            write_error(self, 403, "collection writes are disabled")
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))

@@ -175,6 +175,35 @@ class TestRasterLayerForGroup:
         expected_map_name = mg.tileindex_map_layer_name(c, groups[0])
         assert expected_map_name in tileindex_line
 
+    def test_mixed_srs_parquet_uses_tilesrs_and_auto_projection(self):
+        c = {
+            "id": "naip-tx-2020",
+            "label": "NAIP TX 2020",
+            "group": "naip",
+            "native_epsg": 4326,
+            "parquet": True,
+            "tileindex": "/indexes/naip-tx-2020.parquet",
+        }
+        group = {
+            "epsg": 4326,
+            "layer_name": "naip-tx-2020",
+            "tileindex": "/indexes/naip-tx-2020.parquet",
+            "tileindex_layer_name": "naip-tx-2020",
+            "tileitem": "location",
+            "tilesrs": "tile_srs",
+            "mixed_srs": True,
+        }
+        tileindex_joined = "\n".join(
+            mg.tileindex_layer_for_group(c, None, group)
+        )
+        joined = "\n".join(mg.raster_layer_for_group(c, group))
+        assert 'CONNECTION "PARQUET:/indexes/naip-tx-2020.parquet"' in tileindex_joined
+        assert 'GROUP "naip"' in joined
+        assert 'TILEITEM "location"' in joined
+        assert 'TILESRS "tile_srs"' in joined
+        assert "      AUTO" in joined
+        assert "init=epsg:4326" not in joined
+
 
 # ---------------------------------------------------------------------------
 # db_connection_string

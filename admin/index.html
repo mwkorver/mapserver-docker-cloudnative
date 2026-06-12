@@ -1249,7 +1249,7 @@ done</pre>
         enabledBtn.type = "button";
         enabledBtn.className = "enabled-toggle " + (collection.enabled ? "on" : "off");
         enabledBtn.textContent = collection.enabled ? "enabled" : "disabled";
-        enabledBtn.disabled = !latestConfig.writeEnabled;
+        enabledBtn.disabled = !latestConfig.collectionWriteEnabled;
         enabledBtn.addEventListener("click", () => toggleCollectionEnabled(collection.collectionName, !collection.enabled, enabledBtn));
         enabledCell.appendChild(enabledBtn);
         row.appendChild(enabledCell);
@@ -1284,7 +1284,7 @@ done</pre>
         deleteButton.style.backgroundColor = "#c92a2a";
         deleteButton.style.color = "white";
         deleteButton.style.borderColor = "#c92a2a";
-        deleteButton.disabled = !latestConfig.writeEnabled;
+        deleteButton.disabled = !latestConfig.collectionWriteEnabled;
         deleteButton.addEventListener("click", () => {
           if (confirm(`Are you sure you want to delete ${collection.collectionName}?`)) {
             deleteCollection(collection.collectionName);
@@ -1369,8 +1369,8 @@ done</pre>
     }
 
     async function deleteCollection(collectionId) {
-      if (!latestConfig.writeEnabled) {
-        logLine(["Admin writes are disabled. Cannot delete collection."]);
+      if (!latestConfig.collectionWriteEnabled) {
+        logLine(["Collection writes are disabled. Cannot delete collection."]);
         return;
       }
       try {
@@ -1455,7 +1455,7 @@ done</pre>
         scanFormStatus.textContent = error.message;
         scanFormStatus.className = "bad";
       } finally {
-        scanSubmit.disabled = !latestConfig.writeEnabled;
+        scanSubmit.disabled = !latestConfig.collectionWriteEnabled;
       }
     }
 
@@ -1843,7 +1843,7 @@ done</pre>
     });
     scanForm.addEventListener("submit", submitScan);
     loadConfig().then(() => {
-      setScanFormEnabled(Boolean(latestConfig.writeEnabled));
+      setScanFormEnabled(Boolean(latestConfig.collectionWriteEnabled));
       return loadCollections();
     });
     refreshCacheStats();

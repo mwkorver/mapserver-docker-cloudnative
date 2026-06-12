@@ -50,6 +50,10 @@ class MapserverStack(Stack):
         ephemeral_storage_gib: int = 21,
         task_role_arn: str = None,
         execution_role_arn: str = None,
+        db_backend: str = "postgis",
+        parquet_selection_json: str = "{}",
+        parquet_index_uri_template: str = "",
+        parquet_selections_s3_uri: str = None,
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
@@ -61,6 +65,8 @@ class MapserverStack(Stack):
                 "'-c task_role_arn=<arn>' context parameter. "
                 "See iam/README.md for instructions."
             )
+        if db_backend not in ("postgis", "parquet"):
+            raise ValueError("db_backend must be 'postgis' or 'parquet'")
 
         # `cdk deploy -c parked=true` scales Fargate to 0 and stops RDS.
         # Default is unparked (running). Re-deploy without the flag to wake.
@@ -164,10 +170,6 @@ class MapserverStack(Stack):
         config_bucket = s3.Bucket.from_bucket_name(
             self, "ConfigBucket", config_bucket_name
         )
-        imagery_bucket = s3.Bucket.from_bucket_name(
-            self, "ImageryBucket", "kyfromabove"
-        )
-
         ecr_repo = ecr.Repository.from_repository_name(
             self, "EcrRepo", ecr_repo_name
         )
@@ -180,114 +182,99 @@ class MapserverStack(Stack):
             removal_policy=RemovalPolicy.DESTROY,
         )
 
-        # --- RDS PostgreSQL + PostGIS -------------------------------------
-        # Custom parameter group enables pg_stat_statements via shared_preload_libraries
-        db_params = rds.ParameterGroup(
-            self,
-            "DbParams",
-            engine=rds.DatabaseInstanceEngine.postgres(
-                version=rds.PostgresEngineVersion.VER_17_2,
-            ),
-            parameters={
-                "shared_preload_libraries": "pg_stat_statements",
-                "track_activity_query_size": "4096",
-            },
-        )
-
-        db_sg = ec2.SecurityGroup(
-            self,
-            "DbSg",
-            vpc=vpc,
-            description="RDS PostgreSQL, in-VPC only",
-            allow_all_outbound=False,
-        )
-
-        db = rds.DatabaseInstance(
-            self,
-            "Db",
-            engine=rds.DatabaseInstanceEngine.postgres(
-                version=rds.PostgresEngineVersion.VER_17_2,
-            ),
-            instance_type=ec2.InstanceType.of(
-                ec2.InstanceClass.BURSTABLE4_GRAVITON,
-                ec2.InstanceSize.MICRO,
-            ),
-            vpc=vpc,
-            vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
-            publicly_accessible=False,
-            allocated_storage=20,
-            storage_type=rds.StorageType.GP3,
-            backup_retention=Duration.days(1),
-            delete_automated_backups=True,
-            deletion_protection=False,
-            removal_policy=RemovalPolicy.DESTROY,
-            credentials=rds.Credentials.from_generated_secret("postgres"),
-            database_name="mapserver",
-            parameter_group=db_params,
-            security_groups=[db_sg],
-        )
-
-        # --- DB init Lambda (custom resource) -----------------------------
-        init_sg = ec2.SecurityGroup(
-            self,
-            "DbInitSg",
-            vpc=vpc,
-            description="DB init lambda",
-            allow_all_outbound=True,
-        )
-        db.connections.allow_default_port_from(init_sg, "DB init lambda")
-
-        init_fn = lambda_.Function(
-            self,
-            "DbInit",
-            runtime=lambda_.Runtime.PYTHON_3_12,
-            architecture=lambda_.Architecture.ARM_64,
-            handler="handler.main",
-            code=lambda_.Code.from_asset(
-                "lambda/db_init",
-                bundling=BundlingOptions(
-                    image=lambda_.Runtime.PYTHON_3_12.bundling_image,
-                    command=[
-                        "bash",
-                        "-c",
-                        "pip install -r requirements.txt -t /asset-output && cp -au . /asset-output",
-                    ],
+        db = None
+        if db_backend == "postgis":
+            # --- RDS PostgreSQL + PostGIS ---------------------------------
+            db_params = rds.ParameterGroup(
+                self,
+                "DbParams",
+                engine=rds.DatabaseInstanceEngine.postgres(
+                    version=rds.PostgresEngineVersion.VER_17_2,
                 ),
-            ),
-            # 5 min: retry budget is ~90 s (8 attempts × backoff); give headroom.
-            timeout=Duration.minutes(5),
-            memory_size=512,
-            vpc=vpc,
-            vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
-            security_groups=[init_sg],
-            allow_public_subnet=True,
-            environment={
-                # Pass secret values directly — Lambda in VPC has no NAT and
-                # no Secrets Manager endpoint, so it cannot call the API.
-                # CloudFormation resolves these at deploy time.
-                "DB_HOST": db.instance_endpoint.hostname,
-                "DB_PORT": str(db.instance_endpoint.port),
-                "DB_NAME": "mapserver",
-                "DB_USER": db.secret.secret_value_from_json("username").unsafe_unwrap(),
-                "DB_PASSWORD": db.secret.secret_value_from_json("password").unsafe_unwrap(),
-            },
-        )
+                parameters={
+                    "shared_preload_libraries": "pg_stat_statements",
+                    "track_activity_query_size": "4096",
+                },
+            )
+            db_sg = ec2.SecurityGroup(
+                self,
+                "DbSg",
+                vpc=vpc,
+                description="RDS PostgreSQL, in-VPC only",
+                allow_all_outbound=False,
+            )
+            db = rds.DatabaseInstance(
+                self,
+                "Db",
+                engine=rds.DatabaseInstanceEngine.postgres(
+                    version=rds.PostgresEngineVersion.VER_17_2,
+                ),
+                instance_type=ec2.InstanceType.of(
+                    ec2.InstanceClass.BURSTABLE4_GRAVITON,
+                    ec2.InstanceSize.MICRO,
+                ),
+                vpc=vpc,
+                vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
+                publicly_accessible=False,
+                allocated_storage=20,
+                storage_type=rds.StorageType.GP3,
+                backup_retention=Duration.days(1),
+                delete_automated_backups=True,
+                deletion_protection=False,
+                removal_policy=RemovalPolicy.DESTROY,
+                credentials=rds.Credentials.from_generated_secret("postgres"),
+                database_name="mapserver",
+                parameter_group=db_params,
+                security_groups=[db_sg],
+            )
 
-        # Ensure the Lambda function is not invoked until the RDS instance and
-        # its security-group ingress rule are both in place. Without this,
-        # CloudFormation may fire the custom resource trigger while the SG rule
-        # is still being applied in parallel, causing a connection timeout.
-        init_fn.node.add_dependency(db)
-
-        provider = cr.Provider(self, "DbInitProvider", on_event_handler=init_fn)
-        # Bump `version` to force the custom resource to re-run on a deploy
-        # (e.g., after editing INIT_SQL in the lambda).
-        CustomResource(
-            self,
-            "DbInitTrigger",
-            service_token=provider.service_token,
-            properties={"version": "6"},  # retry logic + explicit DB dependency
-        )
+            init_sg = ec2.SecurityGroup(
+                self,
+                "DbInitSg",
+                vpc=vpc,
+                description="DB init lambda",
+                allow_all_outbound=True,
+            )
+            db.connections.allow_default_port_from(init_sg, "DB init lambda")
+            init_fn = lambda_.Function(
+                self,
+                "DbInit",
+                runtime=lambda_.Runtime.PYTHON_3_12,
+                architecture=lambda_.Architecture.ARM_64,
+                handler="handler.main",
+                code=lambda_.Code.from_asset(
+                    "lambda/db_init",
+                    bundling=BundlingOptions(
+                        image=lambda_.Runtime.PYTHON_3_12.bundling_image,
+                        command=[
+                            "bash",
+                            "-c",
+                            "pip install -r requirements.txt -t /asset-output && cp -au . /asset-output",
+                        ],
+                    ),
+                ),
+                timeout=Duration.minutes(5),
+                memory_size=512,
+                vpc=vpc,
+                vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
+                security_groups=[init_sg],
+                allow_public_subnet=True,
+                environment={
+                    "DB_HOST": db.instance_endpoint.hostname,
+                    "DB_PORT": str(db.instance_endpoint.port),
+                    "DB_NAME": "mapserver",
+                    "DB_USER": db.secret.secret_value_from_json("username").unsafe_unwrap(),
+                    "DB_PASSWORD": db.secret.secret_value_from_json("password").unsafe_unwrap(),
+                },
+            )
+            init_fn.node.add_dependency(db)
+            provider = cr.Provider(self, "DbInitProvider", on_event_handler=init_fn)
+            CustomResource(
+                self,
+                "DbInitTrigger",
+                service_token=provider.service_token,
+                properties={"version": "6"},
+            )
 
         # COG loading is no longer a one-shot lambda. The admin scan flow
         # (admin_api.py → scan_cog_collection.py, running in the Fargate
@@ -363,11 +350,35 @@ class MapserverStack(Stack):
             execution_role=execution_role,
         )
 
-        # Grant read access to the database credentials secret.
-        # Since the database secret is created within this stack (mutable),
-        # we can attach a resource-based policy to it at deploy time
-        # to authorize the imported task role.
-        db.secret.grant_read(task_role)
+        if db is not None:
+            db.secret.grant_read(task_role)
+
+        container_environment = {
+            "DB_BACKEND": db_backend,
+            "AWS_REGION": self.region,
+            "S3_SIGNING": "required",
+            "MAPSERVER_NUMPROCS": mapserver_numprocs,
+            "ADMIN_WRITE_ENABLED": "true",
+            "ADMIN_COLLECTION_WRITE_ENABLED": "true" if db_backend == "postgis" else "false",
+            "FARGATE_CPU": str(cpu),
+            "FARGATE_MEMORY": str(memory),
+            "FARGATE_EPHEMERAL_STORAGE_GIB": str(ephemeral_storage_gib),
+        }
+        if db_backend == "postgis":
+            container_environment.update({
+                "DB_SECRET_ARN": db.secret.secret_arn,
+                "COLLECTIONS_S3_URI": f"s3://{config_bucket_name}/config/collections.json",
+            })
+        else:
+            container_environment.update({
+                "PARQUET_SELECTION_JSON": parquet_selection_json,
+                "PARQUET_INDEX_URI_TEMPLATE": parquet_index_uri_template,
+                "PARQUET_COG_REGION": self.region,
+                "PARQUET_COG_ACCESS_MODE": "requester-pays",
+                "PARQUET_LAYER_GROUP": "naip",
+            })
+            if parquet_selections_s3_uri:
+                container_environment["PARQUET_SELECTION_S3_URI"] = parquet_selections_s3_uri
 
         container = task_def.add_container(
             "mapserver",
@@ -375,26 +386,7 @@ class MapserverStack(Stack):
             logging=ecs.LogDrivers.aws_logs(
                 stream_prefix="ecs", log_group=log_group
             ),
-            environment={
-                # No MAPFILE_S3_URI: mapfile is derived at startup from the
-                # collections.json loaded from S3 by /etc/entrypoint.sh.
-                # S3 is the durable source of truth; bundled collections.json
-                # is only a first-run seed when config/collections.json is
-                # not present yet.
-                "DB_SECRET_ARN": db.secret.secret_arn,
-                "AWS_REGION": self.region,
-                "COLLECTIONS_S3_URI": f"s3://{config_bucket_name}/config/collections.json",
-                "S3_BUCKET": "kyfromabove",
-                "S3_REGION": self.region,
-                "S3_SIGNING": "required",
-                "MAPSERVER_NUMPROCS": mapserver_numprocs,
-                # Allow admin UI writes in the deployed stack so the user can
-                # add collections via the web UI. Lock down later if exposed.
-                "ADMIN_WRITE_ENABLED": "true",
-                "FARGATE_CPU": str(cpu),
-                "FARGATE_MEMORY": str(memory),
-                "FARGATE_EPHEMERAL_STORAGE_GIB": str(ephemeral_storage_gib),
-            },
+            environment=container_environment,
         )
         container.add_port_mappings(ecs.PortMapping(container_port=80))
 
@@ -405,7 +397,8 @@ class MapserverStack(Stack):
             description="mapserver Fargate tasks",
             allow_all_outbound=True,
         )
-        db.connections.allow_default_port_from(service_sg, "Fargate to DB")
+        if db is not None:
+            db.connections.allow_default_port_from(service_sg, "Fargate to DB")
 
         service = ecs.FargateService(
             self,
@@ -471,42 +464,41 @@ class MapserverStack(Stack):
                 scale_out_cooldown=Duration.seconds(60),
             )
 
-        # --- RDS stop/start when parked -----------------------------------
-        # AWS RDS allows stopping a single-AZ instance for up to 7 days; it
-        # auto-restarts after that. The custom resource fires on every deploy
-        # and ignores the "already in this state" error from RDS.
-        rds_action = "stopDBInstance" if parked else "startDBInstance"
-        cr.AwsCustomResource(
-            self,
-            "RdsState",
-            on_create=cr.AwsSdkCall(
-                service="RDS",
-                action=rds_action,
-                parameters={"DBInstanceIdentifier": db.instance_identifier},
-                physical_resource_id=cr.PhysicalResourceId.of("rds-state"),
-                ignore_error_codes_matching="InvalidDBInstanceState",
-            ),
-            on_update=cr.AwsSdkCall(
-                service="RDS",
-                action=rds_action,
-                parameters={"DBInstanceIdentifier": db.instance_identifier},
-                physical_resource_id=cr.PhysicalResourceId.of("rds-state"),
-                ignore_error_codes_matching="InvalidDBInstanceState",
-            ),
-            policy=cr.AwsCustomResourcePolicy.from_statements(
-                [
-                    iam.PolicyStatement(
-                        actions=["rds:StopDBInstance", "rds:StartDBInstance"],
-                        resources=["*"],
-                    ),
-                ]
-            ),
-        )
+        if db is not None:
+            rds_action = "stopDBInstance" if parked else "startDBInstance"
+            cr.AwsCustomResource(
+                self,
+                "RdsState",
+                on_create=cr.AwsSdkCall(
+                    service="RDS",
+                    action=rds_action,
+                    parameters={"DBInstanceIdentifier": db.instance_identifier},
+                    physical_resource_id=cr.PhysicalResourceId.of("rds-state"),
+                    ignore_error_codes_matching="InvalidDBInstanceState",
+                ),
+                on_update=cr.AwsSdkCall(
+                    service="RDS",
+                    action=rds_action,
+                    parameters={"DBInstanceIdentifier": db.instance_identifier},
+                    physical_resource_id=cr.PhysicalResourceId.of("rds-state"),
+                    ignore_error_codes_matching="InvalidDBInstanceState",
+                ),
+                policy=cr.AwsCustomResourcePolicy.from_statements(
+                    [
+                        iam.PolicyStatement(
+                            actions=["rds:StopDBInstance", "rds:StartDBInstance"],
+                            resources=["*"],
+                        ),
+                    ]
+                ),
+            )
 
         # --- Outputs -------------------------------------------------------
         CfnOutput(self, "AlbDnsName", value=alb.load_balancer_dns_name)
         CfnOutput(self, "WmsUrl", value=f"http://{alb.load_balancer_dns_name}/mapserv")
         CfnOutput(self, "EcrRepoUri", value=ecr_repo.repository_uri)
-        CfnOutput(self, "DbEndpoint", value=db.instance_endpoint.hostname)
-        CfnOutput(self, "DbSecretArn", value=db.secret.secret_arn)
-        CfnOutput(self, "DbInstanceId", value=db.instance_identifier)
+        CfnOutput(self, "DbBackend", value=db_backend)
+        if db is not None:
+            CfnOutput(self, "DbEndpoint", value=db.instance_endpoint.hostname)
+            CfnOutput(self, "DbSecretArn", value=db.secret.secret_arn)
+            CfnOutput(self, "DbInstanceId", value=db.instance_identifier)

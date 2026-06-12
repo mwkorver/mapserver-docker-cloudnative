@@ -4,7 +4,82 @@
 
 A self-contained MapServer + GDAL + nginx stack for serving Cloud Optimized GeoTIFFs (COGs) from AWS S3 over WMS / OGC API — built as a **tool for measuring server-side WMS performance** under different configurations, deployed end-to-end on AWS Fargate (ARM64/Graviton) by a single `cdk deploy`.
 
-**Stack:** MapServer 8.6.3 · GDAL 3.12.4 · nginx (proxy + range-cache + SigV4 signer) · FastCGI · supervisord · Ubuntu 24.04
+**Stack:** MapServer 8.6.3 · GDAL 3.12.4 with GeoParquet · nginx (proxy + range-cache + SigV4 signer) · FastCGI · supervisord · Ubuntu 24.04
+
+The production image uses GDAL's compact Ubuntu base. It builds only the
+standalone Parquet plugin needed by this application, pins its Arrow ABI to
+21.0.0, and excludes DuckDB and GDAL's unrelated full-image drivers. The same
+image serves both index backends.
+
+## Index backend options
+
+The same MapServer/GDAL container supports two deployment-time index backends:
+
+| Backend | CDK context | Index source | Collection mutation |
+|---|---|---|---|
+| PostgreSQL/PostGIS | `-c db_backend=postgis` | `cog_index` in RDS | Admin scans enabled |
+| GDAL GeoParquet | `-c db_backend=parquet` | Selected state/year files staged locally from S3 | Read-only; change selections and redeploy |
+
+PostGIS remains the default. The Parquet backend omits RDS, its secret, DB
+security groups, and the DB-init Lambda. At task startup it downloads only the
+configured state/year indexes, adds `location` and per-COG `tile_srs` fields,
+and generates `collections.json` plus `mapfile.map`. MapServer uses GDAL's
+Parquet driver directly; DuckDB is not in the request path.
+
+Example Parquet deployment:
+
+```bash
+npx aws-cdk deploy \
+  -c db_backend=parquet \
+  -c task_role_arn=$TASK_ROLE_ARN \
+  -c execution_role_arn=$EXECUTION_ROLE_ARN \
+  -c 'parquet_selections={"tx":2020,"ct":2021}'
+```
+
+The default index URI template is:
+
+```text
+s3://cog-stac-viewer-495811053987-us-west-2/lake/collection=naip/region={state}/year={year}/data_0.parquet
+```
+
+Override it with `-c parquet_index_uri_template=...`. The selection may also
+be a JSON array when a state/year needs an explicit URI:
+
+```json
+[
+  {
+    "state": "tx",
+    "year": 2020,
+    "uri": "s3://another-bucket/indexes/tx-2020.parquet"
+  }
+]
+```
+
+For mutable selections, point the task at a small JSON object in S3:
+
+```bash
+npx aws-cdk deploy \
+  -c db_backend=parquet \
+  -c parquet_selections_s3_uri=s3://my-config/config/parquet-selections.json \
+  -c task_role_arn=$TASK_ROLE_ARN \
+  -c execution_role_arn=$EXECUTION_ROLE_ARN
+```
+
+The object uses the same JSON mapping or array accepted by
+`parquet_selections`. After replacing it, invalidate the running container:
+
+```bash
+curl -X POST "$MAPSERVER_URL/admin/api/parquet-refresh"
+curl "$MAPSERVER_URL/admin/api/parquet-refresh"
+```
+
+The POST returns `202` and refreshes in the background. New indexes are fully
+downloaded and staged in an immutable generation before MapServer workers are
+briefly stopped and the catalog/mapfile are atomically switched. A failed
+refresh leaves the prior generation active. The task role needs `s3:GetObject`
+for both the pointer object and every referenced Parquet index. The current
+admin API has no built-in authentication, so do not expose its mutation
+endpoints publicly without an ALB/WAF/authentication control.
 
 ---
 
@@ -64,7 +139,7 @@ This repo also builds on the original Dockerised-MapServer work by [pedros007](h
 
 ## How it works
 
-1. **Deploy the stack** — `cdk deploy` provisions Fargate, ALB, RDS, log group, IAM, etc.
+1. **Deploy the stack** — `cdk deploy` provisions Fargate, ALB, logs, and optionally RDS/PostGIS.
 2. **Open the admin UI** at `<alb>/admin/` and use the **Add a Collection** form to point at any bucket+prefix of COGs.
 3. The container's `scan_cog_collection.py` walks the bucket, reads each COG's header in parallel via GDAL, computes a per-COG bounding box, and writes:
    - A **native-CRS [FlatGeobuf](https://flatgeobuf.org/) tile index** (used by MapServer's raster `TILEINDEX` for tile lookup, **and** by MapServer's WFS layer that the OpenLayers viewer queries for COG footprints — R-tree indexed for fast spatial lookup at both layers).

@@ -1,0 +1,15 @@
+diff --git a/ogr/ogrsf_frmts/parquet/ogrparquetdriver.cpp b/ogr/ogrsf_frmts/parquet/ogrparquetdriver.cpp
+index 28253c4..6575edb 100644
+--- a/ogr/ogrsf_frmts/parquet/ogrparquetdriver.cpp
++++ b/ogr/ogrsf_frmts/parquet/ogrparquetdriver.cpp
+@@ -562,7 +562,9 @@ static GDALDataset *OGRParquetDriverOpen(GDALOpenInfo *poOpenInfo)
+         }
+     }
+ 
+-    if (bStartedWithParquetPrefix || poOpenInfo->bIsDirectory ||
++    const bool bForceDirect = CPLTestBool(
++        CPLGetConfigOption("OGR_PARQUET_FORCE_DIRECT", "NO"));
++    if ((bStartedWithParquetPrefix && !bForceDirect) || poOpenInfo->bIsDirectory ||
+         !osQueryParameters.empty())
+     {
+         VSIStatBufL sStat;

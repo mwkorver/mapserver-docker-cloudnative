@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+import json
 import aws_cdk as cdk
 
 from mapserver_stack import MapserverStack
@@ -23,6 +24,20 @@ ephemeral_storage_gib = int(app.node.try_get_context("mapserver_ephemeral_storag
 
 task_role_arn = app.node.try_get_context("task_role_arn")
 execution_role_arn = app.node.try_get_context("execution_role_arn")
+db_backend = str(app.node.try_get_context("db_backend") or "postgis").lower()
+if db_backend not in ("postgis", "parquet"):
+    raise ValueError("db_backend must be 'postgis' or 'parquet'")
+
+parquet_selections = app.node.try_get_context("parquet_selections") or {}
+if isinstance(parquet_selections, str):
+    parquet_selections = json.loads(parquet_selections)
+parquet_selection_json = json.dumps(parquet_selections, separators=(",", ":"))
+parquet_index_uri_template = (
+    app.node.try_get_context("parquet_index_uri_template")
+    or "s3://cog-stac-viewer-495811053987-us-west-2/lake/"
+       "collection=naip/region={state}/year={year}/data_0.parquet"
+)
+parquet_selections_s3_uri = app.node.try_get_context("parquet_selections_s3_uri")
 
 MapserverStack(
     app,
@@ -39,6 +54,10 @@ MapserverStack(
     ephemeral_storage_gib=ephemeral_storage_gib,
     task_role_arn=task_role_arn,
     execution_role_arn=execution_role_arn,
+    db_backend=db_backend,
+    parquet_selection_json=parquet_selection_json,
+    parquet_index_uri_template=parquet_index_uri_template,
+    parquet_selections_s3_uri=parquet_selections_s3_uri,
 )
 
 app.synth()
