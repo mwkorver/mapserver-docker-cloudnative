@@ -356,9 +356,23 @@ docker run -d --name mapserver --rm -p 8080:80 \
 
 Open:
 - `http://localhost:8080/viewer/` — OpenLayers map
-- `http://localhost:8080/admin/` — Collections / Runtime / Cache / Benchmark tabs (with live worker counts and an active-backend chip showing "FlatGeobuf" or "PostGIS")
+- `http://localhost:8080/admin/` — Collections / Runtime / Cache / Benchmark tabs (with live worker counts and an active-backend chip showing "FlatGeobuf", "PostGIS", or "GeoParquet")
 
 > **SSO/STS token expiry**: temporary credentials live ~1 hour. For longer local sessions, run [`scripts/auto_refresh_credentials.sh`](scripts/auto_refresh_credentials.sh) in the background — it re-exports fresh creds into the container's `/tmp/aws_credentials.json` every 15 minutes, which the in-container SigV4 signer picks up automatically.
+
+### Running with GeoParquet backend locally
+
+To run and explore the GeoParquet backend locally, pass `DB_BACKEND=parquet` and define `PARQUET_SELECTION_JSON` with your selections:
+
+```bash
+eval $(aws configure export-credentials --format env)
+docker run -d --name mapserver --rm -p 8080:80 \
+  -e DB_BACKEND=parquet \
+  -e PARQUET_SELECTION_JSON='{"tx":2020,"ct":2021}' \
+  -e ADMIN_WRITE_ENABLED=true \
+  -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN \
+  mapserver:local
+```
 
 ---
 
@@ -410,6 +424,37 @@ GitHub Actions builds and pushes the image to ECR on every push to `main`. Authe
 - ECR repo named `mapserver-docker-cloudnative`
 
 See [`.github/workflows/build-push.yml`](.github/workflows/build-push.yml) for the full pipeline.
+
+---
+
+## Development and Testing
+
+### Python Unit Tests
+The python unit tests cover the mapfile generator, Parquet backends, refresh routines, and catalog scanner.
+
+To install dependencies and run the unit tests locally:
+```bash
+# Create a virtual environment and install requirements
+pip install pytest boto3
+
+# Run the unit tests
+pytest
+```
+
+### UI Integration Tests
+UI integration tests verify OpenLayers viewer functionality, WMS capabilities, and admin interfaces using Playwright.
+
+To set up and run the UI tests:
+```bash
+# Install node packages
+npm install
+
+# Install Playwright browsers
+npx playwright install
+
+# Run the UI tests
+npm test
+```
 
 ---
 
