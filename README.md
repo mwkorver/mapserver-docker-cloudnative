@@ -252,7 +252,7 @@ docker build \
 > ln -sfn $(brew --prefix)/opt/docker-buildx/bin/docker-buildx ~/.docker/cli-plugins/docker-buildx
 > ```
 
-Or skip the manual build entirely and push to `main` — the GitHub Actions workflow at [`.github/workflows/build-push.yml`](.github/workflows/build-push.yml) builds and pushes on every commit (x86 runners, so it always cross-compiles to arm64). It needs one repository variable (`AWS_ACCOUNT_ID`) and an IAM role (`github-actions-mapserver`) with an OIDC trust policy — see [`iam/trust-policy.json`](iam/trust-policy.json).
+Or skip the manual build entirely and push to `main` — the GitHub Actions workflow at [`.github/workflows/build-push.yml`](.github/workflows/build-push.yml) builds the image on every pull request and pushes it to ECR on merge to `main` (x86 runners, so it always cross-compiles to arm64). It needs one repository variable (`AWS_ACCOUNT_ID`) and an IAM role (`github-actions-mapserver`) with an OIDC trust policy — see [`iam/trust-policy.json`](iam/trust-policy.json).
 
 ### Step 3 — Deploy the CDK stack
 
