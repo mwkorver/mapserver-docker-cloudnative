@@ -1,5 +1,8 @@
 # mapserver-docker-cloudnative
 
+[![Test](https://github.com/mwkorver/mapserver-docker-cloudnative/actions/workflows/test.yml/badge.svg)](https://github.com/mwkorver/mapserver-docker-cloudnative/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 > Based on the original work by [pedros007](https://github.com/pedros007/mapserver-docker). Thanks to Pete Schmitt for laying the foundation.
 
 A self-contained MapServer + GDAL + nginx stack for serving Cloud Optimized GeoTIFFs (COGs) from AWS S3 over WMS / OGC API — built as a **tool for measuring server-side WMS performance** under different configurations, deployed end-to-end on AWS Fargate (ARM64/Graviton) by a single `cdk deploy`.
@@ -134,6 +137,16 @@ This project is a different shape:
 The nginx-byte-range-proxy-cache-in-front-of-GDAL pattern has been discussed by **[Even Rouault](https://github.com/rouault)** — the lead GDAL maintainer — on the `gdal-dev` mailing list and at FOSS4G as one approach to amortising S3 byte-range latency. To my knowledge no published reference deployment of that pattern existed before this repo; the components have been talked about, but not assembled into a `cdk deploy`-able working stack with the measurement surface attached. Credit for the underlying idea belongs there.
 
 This repo also builds on the original Dockerised-MapServer work by [pedros007](https://github.com/pedros007/mapserver-docker), credited at the top.
+
+### Divergence from pedros007
+
+This fork keeps the "MapServer + GDAL in a container" premise but rebuilds the serving path and deployment around cloud-native COG measurement:
+
+- **nginx + FastCGI instead of Apache + CGI** — a persistent FastCGI worker pool behind nginx, replacing the per-request CGI model.
+- **nginx byte-range proxy cache + SigV4 signer** (`etc/s3_sigv4_proxy.py`) in front of GDAL's `/vsicurl/`, so private/requester-pays S3 COGs are signed and their byte ranges cached on local disk.
+- **Two deployment-time index backends** — PostGIS (`cog_index` in RDS) or GDAL GeoParquet staged from S3 — with a `scan_cog_collection.py` scanner and generated `collections.json` / `mapfile.map`.
+- **Admin, viewer, and benchmark surfaces** — an admin scan UI, an OpenLayers viewer with tile-timing overlay, and a benchmark tab / `/admin/api/benchmark` endpoint for observing the GDAL and cache tunables.
+- **End-to-end AWS deployment** — a single `cdk deploy` provisions Fargate (ARM64/Graviton), ALB, logs, and optional RDS, with least-privilege task/execution roles managed out of band.
 
 ---
 
@@ -414,16 +427,17 @@ In local mode (no RDS), MapServer reads tile indexes from FGB files instead of P
 
 ## CI/CD
 
-GitHub Actions builds and pushes the image to ECR on every push to `main`. Authentication is OIDC — no long-lived AWS keys in GitHub.
+Two GitHub Actions workflows run on every push and pull request to `main`:
 
-**Required GitHub Actions variables:**
+- **[`test.yml`](.github/workflows/test.yml)** runs the Python unit tests (`pytest -q`). The tests are hermetic — `osgeo`/`boto3`/`psycopg2` are lazily imported and the one GDAL-dependent test class is `skipif`-guarded — so the job needs only `pytest` and no AWS credentials.
+- **[`build-push.yml`](.github/workflows/build-push.yml)** builds the ARM64 image; on pushes to `main` it also pushes to ECR. Authentication is OIDC — no long-lived AWS keys in GitHub.
+
+**Required GitHub Actions variables (build/push only):**
 - `AWS_ACCOUNT_ID` — your 12-digit AWS account ID
 
-**Required AWS setup:**
+**Required AWS setup (build/push only):**
 - IAM role `github-actions-mapserver` with OIDC trust policy (see [`iam/trust-policy.json`](iam/trust-policy.json))
 - ECR repo named `mapserver-docker-cloudnative`
-
-See [`.github/workflows/build-push.yml`](.github/workflows/build-push.yml) for the full pipeline.
 
 ---
 
